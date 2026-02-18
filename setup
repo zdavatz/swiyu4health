@@ -1,0 +1,684 @@
+#!/usr/bin/env bash
+# =============================================================================
+# swiyu Generic Issuer & Verifier – Setup-Script für Debian
+# =============================================================================
+# Voraussetzungen (müssen vor diesem Script erfüllt sein):
+#   1. Registrierung im swiyu Trust Infrastructure Portal
+#   2. Registrierung im API Self-Service Portal
+#   3. Signing-Keys generiert via didtoolbox.jar
+#   4. DID registriert im Identifier Registry
+#
+# Dokumentation: https://swiyu-admin-ch.github.io/cookbooks/
+# =============================================================================
+set -euo pipefail
+
+# ─────────────────────────────────────────────────────────────────────────────
+# .ENV AUTOMATISCH LADEN
+# ─────────────────────────────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="${SCRIPT_DIR}/.env"
+
+if [[ -f "${ENV_FILE}" ]]; then
+    echo "[INFO]  Lade Konfiguration aus ${ENV_FILE}..."
+    set -a
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        # Kommentare und leere Zeilen überspringen
+        [[ "${line}" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// }" ]] && continue
+        export "${line?}"
+    done < "${ENV_FILE}"
+    set +a
+    echo "[OK]    .env geladen."
+else
+    echo "[WARN]  Keine .env Datei gefunden unter ${ENV_FILE}"
+    echo "        Bitte erstellen: nano ${ENV_FILE}"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FARBEN & HELPER
+# ─────────────────────────────────────────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+info()    { echo -e "${CYAN}[INFO]${NC}  $*"; }
+success() { echo -e "${GREEN}[OK]${NC}    $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
+
+SETUP_DIR="${SWIYU_SETUP_DIR:-/opt/swiyu}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. KONFIGURATIONSVARIABLEN  (hier anpassen oder als Env-Vars übergeben)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Allgemein ──────────────────────────────────────────────────────────────
+: "${EXTERNAL_DOMAIN:?Bitte EXTERNAL_DOMAIN setzen, z.B. swiyu.ywesee.com}"
+# Beispiele:
+#   ISSUER_EXTERNAL_URL   = https://issuer.mein-server.example.ch
+#   VERIFIER_EXTERNAL_URL = https://verifier.mein-server.example.ch
+ISSUER_EXTERNAL_URL="${ISSUER_EXTERNAL_URL:-https://${EXTERNAL_DOMAIN}/issuer}"
+VERIFIER_EXTERNAL_URL="${VERIFIER_EXTERNAL_URL:-https://${EXTERNAL_DOMAIN}/verifier}"
+
+# ── Issuer-Schlüssel & DID ─────────────────────────────────────────────────
+: "${ISSUER_DID:?Bitte ISSUER_DID setzen (did:tdw:...)}"
+: "${ISSUER_DID_VERIFICATION_METHOD:?Bitte ISSUER_DID_VERIFICATION_METHOD setzen (did:tdw:...#keyFragment)}"
+: "${ISSUER_SIGNING_KEY:?Bitte ISSUER_SIGNING_KEY setzen (PEM oder Base64-kodierter privater Schlüssel)}"
+: "${STATUS_LIST_SIGNING_KEY:?Bitte STATUS_LIST_SIGNING_KEY setzen}"
+: "${STATUS_LIST_VERIFICATION_METHOD:?Bitte STATUS_LIST_VERIFICATION_METHOD setzen}"
+
+# ── Verifier-Schlüssel & DID ───────────────────────────────────────────────
+: "${VERIFIER_DID:?Bitte VERIFIER_DID setzen (did:tdw:...)}"
+: "${VERIFIER_DID_VERIFICATION_METHOD:?Bitte VERIFIER_DID_VERIFICATION_METHOD setzen}"
+: "${VERIFIER_SIGNING_KEY:?Bitte VERIFIER_SIGNING_KEY setzen}"
+
+# ── swiyu API-Credentials (aus dem API Self-Service Portal) ────────────────
+: "${SWIYU_PARTNER_ID:?Bitte SWIYU_PARTNER_ID setzen}"
+SWIYU_STATUS_REGISTRY_API_URL="${SWIYU_STATUS_REGISTRY_API_URL:-https://status-reg.trust-infra.swiyu-int.admin.ch/api/v1}"
+SWIYU_STATUS_REGISTRY_TOKEN_URL="${SWIYU_STATUS_REGISTRY_TOKEN_URL:-https://keymanager-prd.api.admin.ch/keycloak/realms/APIGW}"
+: "${SWIYU_STATUS_REGISTRY_CUSTOMER_KEY:?Bitte SWIYU_STATUS_REGISTRY_CUSTOMER_KEY setzen}"
+: "${SWIYU_STATUS_REGISTRY_CUSTOMER_SECRET:?Bitte SWIYU_STATUS_REGISTRY_CUSTOMER_SECRET setzen}"
+: "${SWIYU_STATUS_REGISTRY_BOOTSTRAP_REFRESH_TOKEN:?Bitte SWIYU_STATUS_REGISTRY_BOOTSTRAP_REFRESH_TOKEN setzen}"
+
+# ── Datenbank-Passwörter (zufällig generiert, falls nicht gesetzt) ─────────
+ISSUER_DB_PASSWORD="${ISSUER_DB_PASSWORD:-$(openssl rand -hex 24)}"
+VERIFIER_DB_PASSWORD="${VERIFIER_DB_PASSWORD:-$(openssl rand -hex 24)}"
+
+# ── Docker-Image-Tags ──────────────────────────────────────────────────────
+ISSUER_IMAGE_TAG="${ISSUER_IMAGE_TAG:-stable}"
+VERIFIER_IMAGE_TAG="${VERIFIER_IMAGE_TAG:-stable}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. ABHÄNGIGKEITEN INSTALLIEREN
+# ─────────────────────────────────────────────────────────────────────────────
+install_dependencies() {
+    info "Prüfe und installiere Abhängigkeiten..."
+    apt-get update -qq
+
+    # Docker
+    if ! command -v docker &>/dev/null; then
+        info "Installiere Docker..."
+        apt-get install -y -qq ca-certificates curl gnupg lsb-release
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/debian/gpg \
+            | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        chmod a+r /etc/apt/keyrings/docker.gpg
+        echo "deb [arch=$(dpkg --print-architecture) \
+signed-by=/etc/apt/keyrings/docker.gpg] \
+https://download.docker.com/linux/debian \
+$(lsb_release -cs) stable" \
+            | tee /etc/apt/sources.list.d/docker.list > /dev/null
+        apt-get update -qq
+        apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin
+        systemctl enable --now docker
+        success "Docker installiert."
+    else
+        success "Docker bereits vorhanden: $(docker --version)"
+    fi
+
+    # Docker Compose v2
+    if ! docker compose version &>/dev/null; then
+        error "Docker Compose Plugin nicht gefunden. Bitte Docker neu installieren."
+    fi
+
+    # Java (für didtoolbox – optional, nur wenn noch kein DID vorhanden)
+    if ! command -v java &>/dev/null; then
+        info "Installiere OpenJDK 17 (für didtoolbox)..."
+        apt-get install -y -qq openjdk-17-jre-headless
+        success "Java installiert."
+    fi
+
+    # Apache + Certbot (Reverse Proxy mit Let's Encrypt)
+    if ! command -v apache2 &>/dev/null; then
+        info "Installiere Apache..."
+        apt-get install -y -qq apache2
+        success "Apache installiert."
+    else
+        success "Apache bereits vorhanden."
+    fi
+    a2enmod proxy proxy_http ssl -q || true
+
+    if ! command -v certbot &>/dev/null; then
+        info "Installiere Certbot..."
+        apt-get install -y -qq certbot python3-certbot-apache
+        success "Certbot installiert."
+    else
+        success "Certbot bereits vorhanden."
+    fi
+
+    # Weitere Hilfswerkzeuge
+    apt-get install -y -qq curl jq openssl
+    success "Alle Abhängigkeiten installiert."
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. VERZEICHNISSTRUKTUR ANLEGEN
+# ─────────────────────────────────────────────────────────────────────────────
+create_directories() {
+    info "Erstelle Verzeichnisstruktur unter ${SETUP_DIR}..."
+    mkdir -p \
+        "${SETUP_DIR}/issuer/config" \
+        "${SETUP_DIR}/issuer/data" \
+        "${SETUP_DIR}/verifier/config" \
+        "${SETUP_DIR}/verifier/data"
+    chmod 750 "${SETUP_DIR}/issuer" "${SETUP_DIR}/verifier"
+    success "Verzeichnisse erstellt."
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. ISSUER-METADATEN (Credential-Erscheinungsbild in der Wallet)
+# ─────────────────────────────────────────────────────────────────────────────
+write_issuer_metadata() {
+    info "Schreibe Issuer-Metadaten..."
+    # Pflichtfelder: version "1.0", credential_configurations_supported (nicht credentials_supported)
+    cat > "${SETUP_DIR}/issuer/config/issuer_metadata.json" <<EOF
+{
+  "version": "1.0",
+  "credential_issuer": "${ISSUER_EXTERNAL_URL}",
+  "credential_endpoint": "${ISSUER_EXTERNAL_URL}/oid4vci/credential",
+  "credential_configurations_supported": {
+    "my-credential": {
+      "format": "vc+sd-jwt",
+      "vct": "my-credential-sdjwt",
+      "credential_signing_alg_values_supported": ["ES256"],
+      "display": [
+        {
+          "name": "Mein Credential",
+          "locale": "de-CH",
+          "background_color": "#003d73",
+          "text_color": "#ffffff",
+          "logo": {
+            "uri": "https://${EXTERNAL_DOMAIN}/logo.png",
+            "alt_text": "Organisation Logo"
+          }
+        }
+      ]
+    }
+  }
+}
+EOF
+    success "Issuer-Metadaten geschrieben."
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. VERIFIER-METADATEN (Client-Metadata für OID4VP)
+# ─────────────────────────────────────────────────────────────────────────────
+write_verifier_metadata() {
+    info "Schreibe Verifier-Metadaten..."
+    cat > "${SETUP_DIR}/verifier/config/verifier_metadata.json" <<EOF
+{
+  "client_id": "${VERIFIER_DID}",
+  "client_name": "Mein Verifier",
+  "client_name#de": "Mein Verifier",
+  "client_name#fr": "Mon vérificateur",
+  "client_name#it": "Il mio verificatore",
+  "client_name#en": "My Verifier",
+  "logo_uri": "https://example.ch/logo.png",
+  "contacts": ["admin@example.ch"]
+}
+EOF
+    success "Verifier-Metadaten geschrieben."
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. DOCKER COMPOSE – ISSUER
+# ─────────────────────────────────────────────────────────────────────────────
+write_issuer_compose() {
+    info "Schreibe Issuer docker-compose.yml..."
+    cat > "${SETUP_DIR}/issuer/docker-compose.yml" <<EOF
+# swiyu Generic Issuer – Docker Compose
+# Generiert von swiyu-setup.sh
+services:
+  # ── PostgreSQL Datenbank ─────────────────────────────────────────────────
+  issuer-db:
+    image: postgres:15-alpine
+    container_name: swiyu-issuer-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: issuer
+      POSTGRES_PASSWORD: \${ISSUER_DB_PASSWORD}
+      POSTGRES_DB: issuerdb
+    volumes:
+      - issuer-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U issuer -d issuerdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - issuer-internal
+
+  # ── Issuer Service (OID4VCI – öffentlich erreichbar) ─────────────────────
+  swiyu-issuer-service:
+    image: ghcr.io/swiyu-admin-ch/swiyu-issuer:\${ISSUER_IMAGE_TAG:-stable}
+    container_name: swiyu-issuer-service
+    restart: unless-stopped
+    depends_on:
+      issuer-db:
+        condition: service_healthy
+    environment:
+      # Datenbank
+      POSTGRES_JDBC: jdbc:postgresql://issuer-db:5432/issuerdb
+      POSTGRES_USER: issuer
+      POSTGRES_PASSWORD: \${ISSUER_DB_PASSWORD}
+      # Öffentliche URL
+      EXTERNAL_URL: \${ISSUER_EXTERNAL_URL}
+      # DID & Schlüssel - offizielle Variablennamen gemaess swiyu-issuer Doku!
+      ISSUER_ID: \${ISSUER_DID}
+      DID_SDJWT_VERIFICATION_METHOD: \${ISSUER_DID_VERIFICATION_METHOD}
+      SDJWT_KEY: \${ISSUER_SIGNING_KEY}
+      STATUS_LIST_KEY: \${STATUS_LIST_SIGNING_KEY}
+      DID_STATUS_LIST_VERIFICATION_METHOD: \${STATUS_LIST_VERIFICATION_METHOD}
+      # swiyu Status Registry API
+      SWIYU_PARTNER_ID: \${SWIYU_PARTNER_ID}
+      SWIYU_STATUS_REGISTRY_API_URL: \${SWIYU_STATUS_REGISTRY_API_URL}
+      SWIYU_STATUS_REGISTRY_TOKEN_URL: \${SWIYU_STATUS_REGISTRY_TOKEN_URL}
+      SWIYU_STATUS_REGISTRY_CUSTOMER_KEY: \${SWIYU_STATUS_REGISTRY_CUSTOMER_KEY}
+      SWIYU_STATUS_REGISTRY_CUSTOMER_SECRET: \${SWIYU_STATUS_REGISTRY_CUSTOMER_SECRET}
+      SWIYU_STATUS_REGISTRY_AUTH_ENABLE_REFRESH_TOKEN_FLOW: "true"
+      SWIYU_STATUS_REGISTRY_BOOTSTRAP_REFRESH_TOKEN: \${SWIYU_STATUS_REGISTRY_BOOTSTRAP_REFRESH_TOKEN}
+      # Metadaten - file: Prefix zwingend fuer Filesystem-Pfade!
+      METADATA_CONFIG_FILE: file:/config/issuer_metadata.json
+      # Spring
+      SPRING_PROFILES_ACTIVE: prod
+    volumes:
+      - ./config/issuer_metadata.json:/config/issuer_metadata.json:ro
+    ports:
+      - "8080:8080"
+    networks:
+      - issuer-internal
+      - issuer-external
+
+networks:
+  issuer-internal:
+    internal: true
+  issuer-external:
+
+volumes:
+  issuer-db-data:
+EOF
+    success "Issuer docker-compose.yml geschrieben."
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. DOCKER COMPOSE – VERIFIER
+# ─────────────────────────────────────────────────────────────────────────────
+write_verifier_compose() {
+    info "Schreibe Verifier docker-compose.yml..."
+    cat > "${SETUP_DIR}/verifier/docker-compose.yml" <<EOF
+# swiyu Generic Verifier – Docker Compose
+# Generiert von swiyu-setup.sh
+services:
+  # ── PostgreSQL Datenbank ─────────────────────────────────────────────────
+  verifier-db:
+    image: postgres:15-alpine
+    container_name: swiyu-verifier-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: verifier
+      POSTGRES_PASSWORD: \${VERIFIER_DB_PASSWORD}
+      POSTGRES_DB: verifierdb
+    volumes:
+      - verifier-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U verifier -d verifierdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - verifier-internal
+
+  # ── Verifier Service (OID4VP + Management) ───────────────────────────────
+  swiyu-verifier:
+    image: ghcr.io/swiyu-admin-ch/swiyu-verifier:\${VERIFIER_IMAGE_TAG:-stable}
+    container_name: swiyu-verifier
+    restart: unless-stopped
+    depends_on:
+      verifier-db:
+        condition: service_healthy
+    environment:
+      # Datenbank
+      POSTGRES_JDBC: jdbc:postgresql://verifier-db:5432/verifierdb
+      POSTGRES_USER: verifier
+      POSTGRES_PASSWORD: \${VERIFIER_DB_PASSWORD}
+      # Öffentliche URL (OID4VP-Endpunkt – muss vom Wallet erreichbar sein)
+      EXTERNAL_URL: \${VERIFIER_EXTERNAL_URL}
+      # DID & Schlüssel
+      VERIFIER_DID: \${VERIFIER_DID}
+      DID_VERIFICATION_METHOD: \${VERIFIER_DID_VERIFICATION_METHOD}
+      SIGNING_KEY: \${VERIFIER_SIGNING_KEY}
+      # Metadaten
+      OPENID_CLIENT_METADATA_FILE: /config/verifier_metadata.json
+      # Spring
+      SPRING_PROFILES_ACTIVE: prod
+    volumes:
+      - ./config/verifier_metadata.json:/config/verifier_metadata.json:ro
+    ports:
+      # OID4VP (öffentlich via Reverse Proxy)
+      - "8083:8080"
+      # Management API (NUR intern – NICHT öffentlich exponieren!)
+      - "127.0.0.1:8084:8081"
+    networks:
+      - verifier-internal
+      - verifier-external
+
+networks:
+  verifier-internal:
+    internal: true
+  verifier-external:
+
+volumes:
+  verifier-db-data:
+EOF
+    success "Verifier docker-compose.yml geschrieben."
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. .ENV-DATEIEN SCHREIBEN
+# ─────────────────────────────────────────────────────────────────────────────
+write_env_files() {
+    info "Schreibe .env-Dateien..."
+
+    # Issuer .env
+    cat > "${SETUP_DIR}/issuer/.env" <<EOF
+# swiyu Issuer – Umgebungsvariablen
+# ACHTUNG: Diese Datei enthält Geheimnisse – niemals in Git einchecken!
+ISSUER_IMAGE_TAG=${ISSUER_IMAGE_TAG}
+
+ISSUER_EXTERNAL_URL=${ISSUER_EXTERNAL_URL}
+
+ISSUER_DID=${ISSUER_DID}
+ISSUER_DID_VERIFICATION_METHOD=${ISSUER_DID_VERIFICATION_METHOD}
+ISSUER_SIGNING_KEY=${ISSUER_SIGNING_KEY}
+STATUS_LIST_SIGNING_KEY=${STATUS_LIST_SIGNING_KEY}
+STATUS_LIST_VERIFICATION_METHOD=${STATUS_LIST_VERIFICATION_METHOD}
+
+ISSUER_DB_PASSWORD=${ISSUER_DB_PASSWORD}
+
+SWIYU_PARTNER_ID=${SWIYU_PARTNER_ID}
+SWIYU_STATUS_REGISTRY_API_URL=${SWIYU_STATUS_REGISTRY_API_URL}
+SWIYU_STATUS_REGISTRY_TOKEN_URL=${SWIYU_STATUS_REGISTRY_TOKEN_URL}
+SWIYU_STATUS_REGISTRY_CUSTOMER_KEY=${SWIYU_STATUS_REGISTRY_CUSTOMER_KEY}
+SWIYU_STATUS_REGISTRY_CUSTOMER_SECRET=${SWIYU_STATUS_REGISTRY_CUSTOMER_SECRET}
+SWIYU_STATUS_REGISTRY_BOOTSTRAP_REFRESH_TOKEN=${SWIYU_STATUS_REGISTRY_BOOTSTRAP_REFRESH_TOKEN}
+EOF
+    chmod 600 "${SETUP_DIR}/issuer/.env"
+
+    # Verifier .env
+    cat > "${SETUP_DIR}/verifier/.env" <<EOF
+# swiyu Verifier – Umgebungsvariablen
+# ACHTUNG: Diese Datei enthält Geheimnisse – niemals in Git einchecken!
+VERIFIER_IMAGE_TAG=${VERIFIER_IMAGE_TAG}
+
+VERIFIER_EXTERNAL_URL=${VERIFIER_EXTERNAL_URL}
+
+VERIFIER_DID=${VERIFIER_DID}
+VERIFIER_DID_VERIFICATION_METHOD=${VERIFIER_DID_VERIFICATION_METHOD}
+VERIFIER_SIGNING_KEY=${VERIFIER_SIGNING_KEY}
+
+VERIFIER_DB_PASSWORD=${VERIFIER_DB_PASSWORD}
+EOF
+    chmod 600 "${SETUP_DIR}/verifier/.env"
+    success ".env-Dateien geschrieben (chmod 600)."
+}# ─────────────────────────────────────────────────────────────────────────────
+# 9. APACHE REVERSE PROXY KONFIGURIEREN
+# Caddy wurde durch Apache ersetzt (Port-Konflikt vermieden)
+# ─────────────────────────────────────────────────────────────────────────────
+configure_apache() {
+    info "Konfiguriere Apache Reverse Proxy fuer ${EXTERNAL_DOMAIN}..."
+    cat > "/etc/apache2/sites-available/swiyu.conf" <<EOF
+<VirtualHost *:80>
+    ServerName ${EXTERNAL_DOMAIN}
+    ProxyPass        /issuer/   http://localhost:8080/
+    ProxyPassReverse /issuer/   http://localhost:8080/
+    ProxyPass        /verifier/ http://localhost:8083/
+    ProxyPassReverse /verifier/ http://localhost:8083/
+    ErrorLog  \${APACHE_LOG_DIR}/swiyu-error.log
+    CustomLog \${APACHE_LOG_DIR}/swiyu-access.log combined
+</VirtualHost>
+# ACHTUNG: Port 8084 (Verifier Management API) ist NICHT oeffentlich erreichbar
+EOF
+    a2ensite swiyu.conf -q
+    apache2ctl configtest
+    systemctl reload apache2
+    success "Apache HTTP konfiguriert."
+
+    # TLS via certbot
+    if certbot --apache -d "${EXTERNAL_DOMAIN}" --non-interactive --agree-tos \
+        --email "admin@${EXTERNAL_DOMAIN}" --redirect 2>/dev/null; then
+        success "TLS-Zertifikat erstellt."
+        local ssl_conf
+        ssl_conf=$(find /etc/apache2/sites-available -name "*le-ssl*" 2>/dev/null | head -1)
+        if [[ -n "${ssl_conf}" ]] && ! grep -q "ProxyPass" "${ssl_conf}"; then
+            sed -i "s|</VirtualHost>|    ProxyPass        /issuer/   http://localhost:8080/\n    ProxyPassReverse /issuer/   http://localhost:8080/\n    ProxyPass        /verifier/ http://localhost:8083/\n    ProxyPassReverse /verifier/ http://localhost:8083/\n\n</VirtualHost>|" "${ssl_conf}"
+            systemctl reload apache2
+            success "Proxy-Eintraege in SSL-Konfiguration eingefuegt."
+        fi
+    else
+        warn "certbot fehlgeschlagen - manuell ausfuehren:"
+        warn "  sudo certbot --apache -d ${EXTERNAL_DOMAIN}"
+    fi
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10. SYSTEMD-SERVICES ANLEGEN (Auto-Start)
+# ─────────────────────────────────────────────────────────────────────────────
+write_systemd_units() {
+    info "Schreibe systemd-Units..."
+
+    for svc in issuer verifier; do
+        local dir="${SETUP_DIR}/${svc}"
+        cat > "/etc/systemd/system/swiyu-${svc}.service" <<EOF
+[Unit]
+Description=swiyu Generic ${svc^}
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${dir}
+EnvironmentFile=${dir}/.env
+ExecStart=/usr/bin/docker compose up --remove-orphans
+ExecStop=/usr/bin/docker compose down
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    done
+
+    systemctl daemon-reload
+    success "systemd-Units swiyu-issuer.service und swiyu-verifier.service registriert."
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10. SERVICES STARTEN
+# ─────────────────────────────────────────────────────────────────────────────
+start_services() {
+    info "Starte swiyu-Dienste..."
+
+    for svc in issuer verifier; do
+        info "  → swiyu-${svc}..."
+        systemctl enable --now "swiyu-${svc}.service"
+    done
+
+    info "Warte 30 Sekunden auf Initialisierung..."
+    sleep 30
+
+    # Health-Check
+    local issuer_ok=false verifier_ok=false
+    curl -sf "http://localhost:8080/actuator/health" | grep -q '"status":"UP"' && issuer_ok=true
+    curl -sf "http://localhost:8083/actuator/health" | grep -q '"status":"UP"' && verifier_ok=true
+
+    $issuer_ok  && success "Issuer Service läuft."  || warn "Issuer Service noch nicht bereit – Logs prüfen."
+    $verifier_ok && success "Verifier Service läuft." || warn "Verifier Service noch nicht bereit – Logs prüfen."
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 11. STATUS-LISTE INITIALISIEREN (Issuer)
+# ─────────────────────────────────────────────────────────────────────────────
+init_status_list() {
+    info "Initialisiere Issuer-Statusliste..."
+    local response
+    response=$(curl -sf -X POST "http://localhost:8080/api/v1/status-list" \
+        -H "Content-Type: application/json" \
+        -d '{"type":"TOKEN_STATUS_LIST","maxLength":100000,"config":{"bits":2}}' \
+        || true)
+
+    if [[ -n "${response}" ]]; then
+        local status_url
+        status_url=$(echo "${response}" | jq -r '.statusRegistryUrl // empty')
+        if [[ -n "${status_url}" ]]; then
+            success "Statusliste erstellt: ${status_url}"
+            echo ""
+            warn "▶ Bitte STATUS_JWT_URL in der Issuer-Konfiguration auf folgenden Wert setzen:"
+            echo "    STATUS_JWT_URL=${status_url}"
+            echo ""
+        else
+            warn "Statusliste-Antwort erhalten, aber statusRegistryUrl nicht gefunden."
+            echo "${response}" | jq .
+        fi
+    else
+        warn "Statusliste konnte nicht automatisch initialisiert werden."
+        warn "Manuell ausführen:"
+        warn "  curl -X POST http://localhost:8080/api/v1/status-list \\"
+        warn "       -H 'Content-Type: application/json' \\"
+        warn "       -d '{\"type\":\"TOKEN_STATUS_LIST\",\"maxLength\":100000,\"config\":{\"bits\":2}}'"
+    fi
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 12. ABSCHLUSS-ZUSAMMENFASSUNG
+# ─────────────────────────────────────────────────────────────────────────────
+print_summary() {
+    echo ""
+    echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}  swiyu Setup abgeschlossen!${NC}"
+    echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  ${CYAN}Apache Reverse Proxy${NC}"
+    echo    "    https://${EXTERNAL_DOMAIN}/issuer   → Issuer OID4VCI"
+    echo    "    https://${EXTERNAL_DOMAIN}/verifier → Verifier OID4VP"
+    echo    "    TLS:  /etc/letsencrypt/live/${EXTERNAL_DOMAIN}/"
+    echo    "    Logs: /var/log/apache2/swiyu-access.log"
+    echo ""
+    echo -e "  ${CYAN}Issuer Service${NC}"
+    echo    "    OID4VCI (öffentlich):      http://localhost:8080"
+    echo    "    Swagger UI:                http://localhost:8080/swagger-ui/index.html"
+    echo    "    Externe URL:               ${ISSUER_EXTERNAL_URL}"
+    echo ""
+    echo -e "  ${CYAN}Verifier Service${NC}"
+    echo    "    OID4VP (öffentlich):       http://localhost:8083"
+    echo    "    Management API (intern):   http://localhost:8084"
+    echo    "    Swagger UI:                http://localhost:8083/swagger-ui/index.html"
+    echo    "    Externe URL:               ${VERIFIER_EXTERNAL_URL}"
+    echo ""
+    echo -e "  ${CYAN}Nächste Schritte${NC}"
+    echo    "  ─────────────────────────────────────────────────────────────"
+    echo    "  1. DNS prüfen: swiyu.ywesee.com muss auf diesen Server zeigen"
+    echo    "     (Caddy holt das TLS-Zertifikat automatisch sobald DNS stimmt)"
+    echo ""
+    echo    "  2. Firewall: Port 80 und 443 öffnen"
+    echo    "       ufw allow 80/tcp && ufw allow 443/tcp"
+    echo ""
+    echo    "  3. Signing Keys in .env eintragen (falls noch nicht geschehen):"
+    echo    "       nano ${SETUP_DIR}/issuer/.env"
+    echo ""
+    echo    "  4. Erstes Credential ausstellen:"
+    echo    "       https://swiyu-admin-ch.github.io/cookbooks/onboarding-generic-issuer/"
+    echo ""
+    echo    "  5. Erste Verifikation erstellen:"
+    echo    "       curl -X POST http://localhost:8084/management/api/verifications \\"
+    echo    "            -H 'Content-Type: application/json' \\"
+    echo    "            -d @${SETUP_DIR}/verifier/config/sample_verification_request.json"
+    echo ""
+    echo -e "  ${YELLOW}Logs anzeigen:${NC}"
+    echo    "    journalctl -fu swiyu-issuer"
+    echo    "journalctl -fu swiyu-verifier
+    echo    ""
+    echo -e "  ${YELLOW}Wichtig: Refresh Token${NC}"
+    echo    "    Der Token ist einmalig verwendbar! Falls der Issuer-Service abstuerzt,"
+    echo    "    muss im API Self-Service Portal ein neuer Token generiert werden."
+    echo    "    Token eintragen: sudo nano ${SETUP_DIR}/issuer/.env"
+    echo    "    Danach: sudo docker compose -f ${SETUP_DIR}/issuer/docker-compose.yml down -v"
+    echo    "            sudo docker compose -f ${SETUP_DIR}/issuer/docker-compose.yml --env-file ${SETUP_DIR}/issuer/.env up -d""
+    echo ""
+    echo -e "  ${YELLOW}Konfigurationsverzeichnis:${NC} ${SETUP_DIR}"
+    echo ""
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SAMPLE VERIFICATION REQUEST (zur Orientierung)
+# ─────────────────────────────────────────────────────────────────────────────
+write_sample_verification_request() {
+    cat > "${SETUP_DIR}/verifier/config/sample_verification_request.json" <<EOF
+{
+  "accepted_issuer_dids": ["${ISSUER_DID}"],
+  "response_mode": "direct_post",
+  "presentation_definition": {
+    "id": "00000000-0000-0000-0000-000000000000",
+    "input_descriptors": [
+      {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "format": {
+          "vc+sd-jwt": {
+            "sd-jwt_alg_values": ["ES256"],
+            "kb-jwt_alg_values": ["ES256"]
+          }
+        },
+        "constraints": {
+          "fields": [
+            {
+              "path": ["\$.vct"],
+              "filter": {
+                "type": "string",
+                "const": "my-credential-sdjwt"
+              }
+            },
+            {
+              "path": ["\$.age_over_18"]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
+EOF
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────────────────────────────────────
+main() {
+    # Root-Check
+    if [[ "${EUID}" -ne 0 ]]; then
+        error "Dieses Script muss als root ausgeführt werden. Nutze: sudo $0"
+    fi
+
+    echo -e "${CYAN}"
+    echo "  ███████╗██╗    ██╗██╗██╗   ██╗██╗   ██╗"
+    echo "  ██╔════╝██║    ██║██║╚██╗ ██╔╝██║   ██║"
+    echo "  ███████╗██║ █╗ ██║██║ ╚████╔╝ ██║   ██║"
+    echo "  ╚════██║██║███╗██║██║  ╚██╔╝  ██║   ██║"
+    echo "  ███████║╚███╔███╔╝██║   ██║   ╚██████╔╝"
+    echo "  ╚══════╝ ╚══╝╚══╝ ╚═╝   ╚═╝    ╚═════╝ "
+    echo "  Generic Issuer & Verifier – Debian Setup"
+    echo -e "${NC}"
+
+    install_dependencies
+    create_directories
+    write_issuer_metadata
+    write_verifier_metadata
+    write_issuer_compose
+    write_verifier_compose
+    write_env_files
+    write_sample_verification_request
+    write_systemd_units
+    start_services
+    configure_apache
+    init_status_list
+    print_summary
+}
+
+main "$@"
