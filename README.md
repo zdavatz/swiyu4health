@@ -214,6 +214,42 @@ curl -s https://swiyu.ywesee.com/verifier/oid4vp/api/openid-client-metadata.json
 
 ---
 
+
+---
+
+## Trust Registry – Wallet-Akzeptanz
+
+Die swiyu Wallet zeigt **„Ungültiger Nachweis"** wenn der Issuer-DID nicht in der Trust Registry als vertrauenswürdiger Aussteller registriert ist. Das ist unabhängig davon ob Issuer und Verifier korrekt laufen.
+
+### Status prüfen
+
+```bash
+curl -s "https://trust-reg-api.trust-infra.swiyu-int.admin.ch/api/v1/truststatements?did=<ISSUER_DID>"
+# HTTP 200 mit leerem Array = DID nicht registriert
+# HTTP 503 = Trust Registry API gerade nicht verfügbar
+```
+
+### Zugang beantragen
+
+Die `swiyucorebusiness_trust` API im API Self-Service Portal erfordert eine **spezielle Berechtigung** die nicht automatisch vergeben wird:
+
+1. Im [API Self-Service Portal](https://selfservice.api.admin.ch) → `swiyucorebusiness_trust` → „Abonnieren" versuchen
+2. Falls „Sie haben keine Berechtigung": Anfrage an **swiyu@eid.admin.ch** senden
+3. Nach Freischaltung: Trust Statement für den DID via API erstellen
+
+### Trust Statement erstellen (nach Freischaltung)
+
+```bash
+ACCESS_TOKEN="<access_token>"
+
+curl -s -X POST   "https://trust-reg-api.trust-infra.swiyu-int.admin.ch/api/v1/truststatements"   -H "Authorization: Bearer ${ACCESS_TOKEN}"   -H "Content-Type: application/json"   -d '{
+    "issuerDid": "<ISSUER_DID>",
+    "credentialType": "doctor-credential-sdjwt"
+  }' | python3 -m json.tool
+```
+
+> **Hinweis:** Die genaue API-Struktur für Trust Statements ist noch zu verifizieren. Siehe [swiyu Cookbooks](https://swiyu-admin-ch.github.io/cookbooks/) für aktuelle Dokumentation.
+
 ## Bekannte Fallstricke
 
 ### Refresh Token

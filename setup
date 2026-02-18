@@ -582,6 +582,19 @@ start_services() {
 # ─────────────────────────────────────────────────────────────────────────────
 init_status_list() {
     info "Initialisiere Issuer-Statusliste..."
+
+    # Warte bis Service vollständig gestartet ist
+    local max_wait=60
+    local waited=0
+    until curl -sf "http://localhost:8080/actuator/health" | grep -q '"status":"UP"'; do
+        sleep 3
+        waited=$((waited + 3))
+        if [[ ${waited} -ge ${max_wait} ]]; then
+            warn "Service nicht bereit – Statusliste manuell erstellen!"
+            return
+        fi
+    done
+
     local response
     response=$(curl -sf -X POST "http://localhost:8080/management/api/status-list" \
         -H "Content-Type: application/json" \
@@ -599,6 +612,7 @@ init_status_list() {
             echo ""
             # In Datei speichern für spätere Verwendung
             echo "${status_url}" > "${SETUP_DIR}/issuer/status_registry_url.txt"
+            chmod 640 "${SETUP_DIR}/issuer/status_registry_url.txt"
             success "URL gespeichert in: ${SETUP_DIR}/issuer/status_registry_url.txt"
         else
             warn "Unerwartete Antwort:"
@@ -606,7 +620,7 @@ init_status_list() {
         fi
     else
         warn "Statusliste konnte nicht automatisch erstellt werden."
-        warn "Manuell ausführen:"
+        warn "Manuell nach erfolgtem Start ausführen:"
         warn "  curl -X POST http://localhost:8080/management/api/status-list \\"
         warn "       -H 'Content-Type: application/json' \\"
         warn "       -d '{\"type\":\"TOKEN_STATUS_LIST\",\"maxLength\":100000,\"config\":{\"bits\":2}}'"
@@ -684,8 +698,16 @@ print_summary() {
     echo    "    Swagger:    http://localhost:8083/swagger-ui/index.html"
     echo    "    Extern:     ${VERIFIER_EXTERNAL_URL}"
     echo ""
-    echo -e "  ${CYAN}Nächste Schritte${NC}"
-    echo    "  ─────────────────────────────────────────────────────────────"
+    echo -e "  ${CYAN}Naechste Schritte${NC}"
+    echo    "  -------------------------------------------------------------"
+    echo -e "  ${RED}0. Trust Registry - PFLICHT fuer Wallet-Akzeptanz!${NC}"
+    echo    "     Ohne Trust Registry Eintrag zeigt die Wallet: Ungueltiger Nachweis"
+    echo    "     a) swiyucorebusiness_trust im API Self-Service Portal abonnieren"
+    echo    "        (braucht spezielle Berechtigung -> anfragen: swiyu@eid.admin.ch)"
+    echo    "     b) Danach Trust Statement fuer den DID erstellen"
+    echo    "     c) Status pruefen:"
+    echo    "        curl -s https://trust-reg-api.trust-infra.swiyu-int.admin.ch/api/v1/truststatements"
+    echo    ""
     echo    "  1. Erstes Credential ausstellen:"
     local status_url=""
     [[ -f "${SETUP_DIR}/issuer/status_registry_url.txt" ]] && \
