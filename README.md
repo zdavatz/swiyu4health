@@ -219,36 +219,71 @@ curl -s https://swiyu.ywesee.com/verifier/oid4vp/api/openid-client-metadata.json
 
 ## Trust Registry – Wallet-Akzeptanz
 
-Die swiyu Wallet zeigt **„Ungültiger Nachweis"** wenn der Issuer-DID nicht in der Trust Registry als vertrauenswürdiger Aussteller registriert ist. Das ist unabhängig davon ob Issuer und Verifier korrekt laufen.
+Die swiyu Wallet zeigt **„Ungültiger Nachweis"** wenn der Issuer-DID kein Trust Statement in der Trust Registry hat. Das ist unabhängig davon ob Issuer und Verifier korrekt laufen.
 
-### Status prüfen
+### Wie die Wallet die Trust Registry prüft
+
+Die iOS Wallet verwendet **zwei verschiedene Endpunkte**:
+
+| Endpunkt | Zweck | Auth |
+|----------|-------|------|
+| `trust-reg.trust-infra.swiyu-int.admin.ch` | Lesen (Wallet) | keine |
+| `trust-reg-api.trust-infra.swiyu-int.admin.ch` | Schreiben (Authoring) | Bearer Token |
+
+Die Wallet ruft beim Credential-Import auf:
+```
+GET https://trust-reg.trust-infra.swiyu-int.admin.ch/api/v1/truststatements/identity/<ISSUER_DID>
+```
+- Antwort `[]` → kein Trust Statement → „Ungültiger Nachweis"
+- Antwort `[...]` → Trust Statement vorhanden → Credential wird akzeptiert
+
+### Status prüfen (Lese-Endpunkt)
 
 ```bash
-curl -s "https://trust-reg-api.trust-infra.swiyu-int.admin.ch/api/v1/truststatements?did=<ISSUER_DID>"
-# HTTP 200 mit leerem Array = DID nicht registriert
-# HTTP 503 = Trust Registry API gerade nicht verfügbar
+ISSUER_DID="<dein_issuer_did>"
+
+curl -s "https://trust-reg.trust-infra.swiyu-int.admin.ch/api/v1/truststatements/identity/${ISSUER_DID}"
+# [] = kein Trust Statement → Wallet zeigt "Ungültiger Nachweis"
+# [...] = Trust Statement vorhanden → Wallet akzeptiert Credentials
 ```
 
-### Zugang beantragen
+### Access Token holen (für Authoring API)
 
-Die `swiyucorebusiness_trust` API im API Self-Service Portal erfordert eine **spezielle Berechtigung** die nicht automatisch vergeben wird:
-
-1. Im [API Self-Service Portal](https://selfservice.api.admin.ch) → `swiyucorebusiness_trust` → „Abonnieren" versuchen
-2. Falls „Sie haben keine Berechtigung": Anfrage an **swiyu@eid.admin.ch** senden
-3. Nach Freischaltung: Trust Statement für den DID via API erstellen
-
-### Trust Statement erstellen (nach Freischaltung)
+> ⚠️ Den Refresh Token **immer aus der Datenbank holen** – nicht aus `.env`!
+> Der Issuer-Service rotiert den Token automatisch und speichert den neuen in PostgreSQL.
 
 ```bash
-ACCESS_TOKEN="<access_token>"
+# Aktuellen Refresh Token aus DB
+REFRESH_TOKEN=$(sudo docker exec swiyu-issuer-db psql -U issuer -d issuerdb \
+  -tAc "SELECT refresh_token FROM token_set WHERE api_target='STATUS_REGISTRY';")
 
-curl -s -X POST   "https://trust-reg-api.trust-infra.swiyu-int.admin.ch/api/v1/truststatements"   -H "Authorization: Bearer ${ACCESS_TOKEN}"   -H "Content-Type: application/json"   -d '{
-    "issuerDid": "<ISSUER_DID>",
-    "credentialType": "doctor-credential-sdjwt"
-  }' | python3 -m json.tool
+CUSTOMER_SECRET=$(grep SWIYU_STATUS_REGISTRY_CUSTOMER_SECRET /opt/swiyu/issuer/.env | cut -d= -f2)
+CLIENT_ID=$(grep SWIYU_STATUS_REGISTRY_CUSTOMER_KEY /opt/swiyu/issuer/.env | cut -d= -f2)
+
+ACCESS_TOKEN=$(curl -s -X POST \
+  "https://keymanager-prd.api.admin.ch/keycloak/realms/APIGW/protocol/openid-connect/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=refresh_token" \
+  -d "client_id=${CLIENT_ID}" \
+  -d "client_secret=${CUSTOMER_SECRET}" \
+  -d "refresh_token=${REFRESH_TOKEN}" \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['access_token'])")
 ```
 
-> **Hinweis:** Die genaue API-Struktur für Trust Statements ist noch zu verifizieren. Siehe [swiyu Cookbooks](https://swiyu-admin-ch.github.io/cookbooks/) für aktuelle Dokumentation.
+### Trust Statement erstellen
+
+> **Stand Feb 2026:** `trust-reg-api` gibt 503 zurück (pods down). Siehe [GitHub Issue #225](https://github.com/swiyu-admin-ch/swiyu-verifier/issues/225). Sobald verfügbar:
+
+```bash
+curl -s -X POST \
+  "https://trust-reg-api.trust-infra.swiyu-int.admin.ch/api/v1/truststatements" \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "{\"subjectDid\": \"${ISSUER_DID}\"}" \
+  | python3 -m json.tool
+```
+
+> **Voraussetzung:** `swiyucorebusiness_trust` im [API Self-Service Portal](https://selfservice.api.admin.ch) abonniert. Zugang beantragen bei: **swiyu@eid.admin.ch**
 
 ## Bekannte Fallstricke
 
