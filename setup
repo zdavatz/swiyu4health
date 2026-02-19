@@ -187,7 +187,8 @@ write_issuer_metadata() {
 {
   "version": "1.0",
   "credential_issuer": "${ISSUER_EXTERNAL_URL}",
-  "credential_endpoint": "${ISSUER_EXTERNAL_URL}/oid4vci/credential",
+  "credential_endpoint": "${ISSUER_EXTERNAL_URL}/oid4vci/api/credential",
+  "nonce_endpoint": "${ISSUER_EXTERNAL_URL}/oid4vci/api/nonce",
   "credential_configurations_supported": {
     "${CREDENTIAL_TYPE}": {
       "format": "vc+sd-jwt",

@@ -127,6 +127,23 @@ curl -s -X POST http://localhost:8080/management/api/status-list \
 # → statusRegistryUrl speichern!
 ```
 
+### 1b. issuer_metadata.json (Pflichtfelder ab v2.1.1)
+
+```json
+{
+  "version": "1.0",
+  "credential_issuer": "https://swiyu.ywesee.com/issuer",
+  "credential_endpoint": "https://swiyu.ywesee.com/issuer/oid4vci/api/credential",
+  "nonce_endpoint": "https://swiyu.ywesee.com/issuer/oid4vci/api/nonce",
+  "credential_configurations_supported": { ... }
+}
+```
+
+> **Wichtig (Stand Feb 2026, swiyu-issuer v2.1.1):**
+> - `"version": "1.0"` ist Pflicht (nicht `"1"`, nicht weglassen)
+> - `"nonce_endpoint"` ist Pflicht – ohne dieses Feld schlägt die Wallet-Kommunikation fehl
+> - Beide Felder fehlen in der `sample.compose.yml` Vorlage → manuell ergänzen!
+
 ### 2. Credential erstellen
 
 ```bash
@@ -286,6 +303,25 @@ curl -s -X POST \
 > **Voraussetzung:** `swiyucorebusiness_trust` im [API Self-Service Portal](https://selfservice.api.admin.ch) abonniert. Zugang beantragen bei: **swiyu@eid.admin.ch**
 
 ## Bekannte Fallstricke
+
+### version und nonce_endpoint in issuer_metadata.json
+
+Ab **swiyu-issuer v2.1.1** sind zwei neue Pflichtfelder in der `issuer_metadata.json` erforderlich:
+
+```json
+{
+  "version": "1.0",
+  "nonce_endpoint": "https://<domain>/issuer/oid4vci/api/nonce",
+  ...
+}
+```
+
+**Fehlermeldungen ohne diese Felder:**
+- Ohne `version`: `Invalid value for version. Current is null but the constraint is must not be null`
+- Mit `"version": "1"`: `Current is 1 but the constraint is Only version 1.0 is supported`
+- Ohne `nonce_endpoint`: Wallet kann Credential nicht abrufen
+
+Diese Felder fehlen in der offiziellen `sample.compose.yml` Vorlage (Stand Feb 2026) – sie müssen manuell ergänzt werden. Siehe [PR #228](https://github.com/swiyu-admin-ch/swiyu-issuer/pull/228).
 
 ### Refresh Token
 
