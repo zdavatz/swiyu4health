@@ -148,6 +148,26 @@ Ab swiyu-issuer v2.1.1 sind **zwei** Konfigurationsdateien erforderlich:
 > - `"nonce_endpoint"` ist Pflicht
 > - Beide Felder fehlen in der `sample.compose.yml` Vorlage → manuell ergänzen! Siehe [PR #228](https://github.com/swiyu-admin-ch/swiyu-issuer/pull/228).
 
+#### display Pflichtfeld in issuer_metadata.json
+
+Das Top-Level `display` Array ist ein **Pflichtfeld** – der iOS Wallet Decoder wirft einen Fehler wenn es fehlt oder `null` ist (kein `decodeIfPresent`). Die Wallet bricht dann nach dem ersten Request still ab und zeigt „Ungültiger Nachweis".
+
+```json
+{
+  "version": "1.0",
+  "credential_issuer": "https://swiyu.ywesee.com/issuer",
+  "credential_endpoint": "...",
+  "nonce_endpoint": "...",
+  "display": [
+    {
+      "name": "ywesee GmbH",
+      "locale": "de-CH"
+    }
+  ],
+  "credential_configurations_supported": { ... }
+}
+```
+
 #### openid_metadata.json (NEU ab v2.1.1)
 
 ```json
@@ -343,6 +363,22 @@ curl -s -X POST \
 > **Voraussetzung:** `swiyucorebusiness_trust` im [API Self-Service Portal](https://selfservice.api.admin.ch) abonniert. Zugang beantragen bei: **swiyu@eid.admin.ch**
 
 ## Bekannte Fallstricke
+
+### display Pflichtfeld (Top-Level)
+
+Der iOS Wallet Decoder (`CredentialMetadata.swift`) behandelt das Top-Level `display` Array als **Pflichtfeld** – es verwendet `decode` statt `decodeIfPresent`. Wenn `display` fehlt oder `null` ist:
+
+- Wallet ruft `.well-known/openid-credential-issuer` ab (200 OK)
+- Wallet bricht **still** ab ohne weiteren Request
+- Wallet zeigt „Ungültiger Nachweis"
+- Keine Fehlermeldung im Server-Log
+
+**Lösung:** Top-Level `display` in `issuer_metadata.json` ergänzen:
+```json
+"display": [
+  { "name": "ywesee GmbH", "locale": "de-CH" }
+]
+```
 
 ### version und nonce_endpoint in issuer_metadata.json
 

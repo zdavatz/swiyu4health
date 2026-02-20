@@ -195,6 +195,7 @@ write_issuer_metadata() {
     info "Schreibe Issuer-Metadaten..."
     # WICHTIG:
     #   - version "1.0" ist Pflicht
+    #   - display (Top-Level) ist Pflicht – iOS Wallet bricht sonst still ab!
     #   - Schlüssel heisst credential_configurations_supported (nicht credentials_supported)
     #   - claims mit sd: "always" für Selective Disclosure
     cat > "${SETUP_DIR}/issuer/config/issuer_metadata.json" <<EOF
@@ -203,6 +204,12 @@ write_issuer_metadata() {
   "credential_issuer": "${ISSUER_EXTERNAL_URL}",
   "credential_endpoint": "${ISSUER_EXTERNAL_URL}/oid4vci/api/credential",
   "nonce_endpoint": "${ISSUER_EXTERNAL_URL}/oid4vci/api/nonce",
+  "display": [
+    {
+      "name": "${ORGANIZATION_NAME:-ywesee GmbH}",
+      "locale": "de-CH"
+    }
+  ],
   "credential_configurations_supported": {
     "${CREDENTIAL_TYPE}": {
       "format": "vc+sd-jwt",
