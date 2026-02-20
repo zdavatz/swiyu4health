@@ -127,7 +127,11 @@ curl -s -X POST http://localhost:8080/management/api/status-list \
 # → statusRegistryUrl speichern!
 ```
 
-### 1b. issuer_metadata.json (Pflichtfelder ab v2.1.1)
+### 1b. Pflichtdateien ab v2.1.1
+
+Ab swiyu-issuer v2.1.1 sind **zwei** Konfigurationsdateien erforderlich:
+
+#### issuer_metadata.json
 
 ```json
 {
@@ -139,10 +143,32 @@ curl -s -X POST http://localhost:8080/management/api/status-list \
 }
 ```
 
-> **Wichtig (Stand Feb 2026, swiyu-issuer v2.1.1):**
+> **Wichtig:**
 > - `"version": "1.0"` ist Pflicht (nicht `"1"`, nicht weglassen)
-> - `"nonce_endpoint"` ist Pflicht – ohne dieses Feld schlägt die Wallet-Kommunikation fehl
-> - Beide Felder fehlen in der `sample.compose.yml` Vorlage → manuell ergänzen!
+> - `"nonce_endpoint"` ist Pflicht
+> - Beide Felder fehlen in der `sample.compose.yml` Vorlage → manuell ergänzen! Siehe [PR #228](https://github.com/swiyu-admin-ch/swiyu-issuer/pull/228).
+
+#### openid_metadata.json (NEU ab v2.1.1)
+
+```json
+{
+  "issuer": "https://swiyu.ywesee.com/issuer",
+  "token_endpoint": "https://swiyu.ywesee.com/issuer/oid4vci/api/token"
+}
+```
+
+Diese Datei wird von der Wallet über `/.well-known/oauth-authorization-server` abgerufen um den Token-Endpoint zu finden. Ohne diese Datei gibt der Service **500 Internal Server Error** zurück und die Wallet bricht den Credential-Abruf ab.
+
+**docker-compose.yml Konfiguration:**
+```yaml
+environment:
+  METADATA_CONFIG_FILE: file:/config/issuer_metadata.json
+  OPENID_CONFIG_FILE: file:/config/openid_metadata.json   # NEU!
+
+volumes:
+  - ./config/issuer_metadata.json:/config/issuer_metadata.json:ro
+  - ./config/openid_metadata.json:/config/openid_metadata.json:ro  # NEU!
+```
 
 ### 2. Credential erstellen
 
@@ -236,7 +262,7 @@ curl -s https://swiyu.ywesee.com/verifier/oid4vp/api/openid-client-metadata.json
 
 ## Trust Registry – Wallet-Akzeptanz
 
-Die swiyu Wallet zeigt **„Ungültiger Nachweis"** wenn der Issuer-DID kein Trust Statement in der Trust Registry hat. Das ist unabhängig davon ob Issuer und Verifier korrekt laufen.
+Die swiyu Wallet zeigt **„Ungültiger Nachweis"** wenn der Issuer-DID kein Trust Statement in der Trust Registry hat, oder wenn das Trust Statement nicht validiert werden kann. Das ist unabhängig davon ob Issuer und Verifier korrekt laufen.
 
 ### Wie die Wallet die Trust Registry prüft
 
@@ -252,7 +278,21 @@ Die Wallet ruft beim Credential-Import auf:
 GET https://trust-reg.trust-infra.swiyu-int.admin.ch/api/v1/truststatements/identity/<ISSUER_DID>
 ```
 - Antwort `[]` → kein Trust Statement → „Ungültiger Nachweis"
-- Antwort `[...]` → Trust Statement vorhanden → Credential wird akzeptiert
+- Antwort `[...]` → Trust Statement vorhanden → Wallet validiert es
+
+**Wichtig:** Die Wallet validiert das Trust Statement vollständig:
+1. JWS-Signatur des Trust Registry DIDs verifizieren
+2. Status List des Trust Statements prüfen
+3. Subject DID muss mit Issuer DID übereinstimmen
+
+### Bekanntes Problem: Trust Registry DID nicht auflösbar (Stand Feb 2026)
+
+Der Trust Registry DID (`2e246676-...`) ist im Identifier Registry nicht auflösbar:
+```bash
+curl https://identifier-reg.trust-infra.swiyu-int.admin.ch/api/v1/did/2e246676-209a-4c21-aceb-721f8a90b212/did.json
+# → NOT_FOUND
+```
+Das bedeutet die Wallet kann die JWS-Signatur des Trust Statements nicht verifizieren und zeigt „Ungültiger Nachweis" – auch wenn das Trust Statement vorhanden ist. Gemeldet als [Issue #231](https://github.com/swiyu-admin-ch/swiyu-issuer/issues/231).
 
 ### Status prüfen (Lese-Endpunkt)
 
@@ -385,7 +425,8 @@ Die `verifier_metadata.json` muss `vp_formats` mit `jwt_vp` enthalten (Java-Pfli
 │   ├── .env                    (chmod 600)
 │   ├── status_registry_url.txt (nach init_status_list)
 │   └── config/
-│       └── issuer_metadata.json
+│       ├── issuer_metadata.json
+│       └── openid_metadata.json   (NEU ab v2.1.1)
 └── verifier/
     ├── docker-compose.yml
     ├── .env                    (chmod 600)

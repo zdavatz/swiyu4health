@@ -177,6 +177,20 @@ create_directories() {
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. ISSUER-METADATEN
 # ─────────────────────────────────────────────────────────────────────────────
+write_openid_metadata() {
+    info "Schreibe OpenID-Metadaten (openid_metadata.json)..."
+    # WICHTIG (ab swiyu-issuer v2.1.1):
+    #   Diese Datei wird von der Wallet über /.well-known/oauth-authorization-server abgerufen.
+    #   Ohne diese Datei → 500 Internal Server Error → Wallet bricht ab.
+    cat > "${SETUP_DIR}/issuer/config/openid_metadata.json" <<EOF
+{
+  "issuer": "${ISSUER_EXTERNAL_URL}",
+  "token_endpoint": "${ISSUER_EXTERNAL_URL}/oid4vci/api/token"
+}
+EOF
+    success "openid_metadata.json geschrieben."
+}
+
 write_issuer_metadata() {
     info "Schreibe Issuer-Metadaten..."
     # WICHTIG:
@@ -346,9 +360,11 @@ services:
       SWIYU_STATUS_REGISTRY_BOOTSTRAP_REFRESH_TOKEN: \${SWIYU_STATUS_REGISTRY_BOOTSTRAP_REFRESH_TOKEN}
       # Metadaten – file: Prefix ist zwingend für Filesystem-Pfade!
       METADATA_CONFIG_FILE: file:/config/issuer_metadata.json
+      OPENID_CONFIG_FILE: file:/config/openid_metadata.json
       SPRING_PROFILES_ACTIVE: prod
     volumes:
       - ./config/issuer_metadata.json:/config/issuer_metadata.json:ro
+      - ./config/openid_metadata.json:/config/openid_metadata.json:ro
     ports:
       - "8080:8080"
     networks:
@@ -783,6 +799,7 @@ main() {
     install_dependencies
     create_directories
     write_issuer_metadata
+    write_openid_metadata
     write_verifier_metadata
     write_issuer_compose
     write_verifier_compose
