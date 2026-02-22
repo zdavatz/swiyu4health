@@ -221,8 +221,19 @@ echo "<offer_deeplink>" | qrencode -t ANSIUTF8
 
 ## Verifikation erstellen
 
+> **Wichtig (Stand Feb 2026):** Der Verifier hat **keinen separaten Management-Port**.
+> Beide APIs (OID4VP public + Management) laufen auf demselben Port 8080 intern → 8083 extern.
+> Port 8084 ist konfiguriert aber nicht aktiv.
+
+```
+Port 8083 → OID4VP public  (/oid4vp/...)      für swiyu Wallet
+Port 8083 → Management API (/management/...)   für interne Aufrufe
+```
+
+### Lokal testen (auf swiyu.ywesee.com)
+
 ```bash
-curl -s -X POST http://localhost:8084/management/api/verifications \
+curl -s -X POST http://localhost:8083/management/api/verifications \
   -H "Content-Type: application/json" \
   -d '{
     "accepted_issuer_dids": ["<ISSUER_DID>"],
@@ -241,13 +252,40 @@ curl -s -X POST http://localhost:8084/management/api/verifications \
           "fields": [
             {"path": ["$.vct"], "filter": {"type": "string", "const": "doctor-credential-sdjwt"}},
             {"path": ["$.firstName"]},
-            {"path": ["$.lastName"]}
+            {"path": ["$.lastName"]},
+            {"path": ["$.gln"]}
           ]
         }
       }]
     }
   }' | python3 -m json.tool
 # → verification_deeplink als QR-Code ausgeben
+```
+
+### Von externem Server (z.B. amiko.oddb.org)
+
+Der Management-Endpunkt ist via Apache Reverse Proxy mit IP-Whitelist abgesichert:
+
+```
+https://swiyu.ywesee.com/verifier-mgmt/ → http://localhost:8083/management/
+Zugriff nur von: 65.109.136.203 (amiko.oddb.org)
+```
+
+Apache-Config in `/etc/apache2/sites-enabled/swiyu.conf`:
+```apache
+<Location /verifier-mgmt/>
+    ProxyPass http://localhost:8083/management/
+    ProxyPassReverse http://localhost:8083/management/
+    Require ip 65.109.136.203
+</Location>
+```
+
+Test von amiko.oddb.org:
+```bash
+curl -s -X POST https://swiyu.ywesee.com/verifier-mgmt/api/verifications \
+  -H "Content-Type: application/json" \
+  -d '{"accepted_issuer_dids":[],"response_mode":"direct_post","presentation_definition":{"id":"test","input_descriptors":[]}}' \
+  | python3 -m json.tool
 ```
 
 ---

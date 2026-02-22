@@ -440,10 +440,11 @@ services:
     volumes:
       - ./config/verifier_metadata.json:/config/verifier_metadata.json:ro
     ports:
-      # OID4VP (öffentlich via Reverse Proxy)
+    ports:
+      # OID4VP + Management API laufen beide auf Port 8080 intern -> 8083 extern
+      # WICHTIG: Port 8081/8084 (separater Management-Port) ist in dieser Version NICHT aktiv!
+      # Management API erreichbar via: http://localhost:8083/management/api/
       - "8083:8080"
-      # Management API (NUR intern – NICHT öffentlich exponieren!)
-      - "127.0.0.1:8084:8081"
     networks:
       - verifier-internal
       - verifier-external
@@ -515,8 +516,13 @@ configure_apache() {
     # Verifier OID4VP (öffentlich)
     ProxyPass        /verifier/ http://localhost:8083/
     ProxyPassReverse /verifier/ http://localhost:8083/
-
-    # Verifier Management Port 8084 ist NICHT proxied – nur intern erreichbar
+    # Verifier Management API – NUR fuer amiko.oddb.org (IP-Whitelist)
+    # WICHTIG: Management laeuft auf Port 8083 (nicht 8084!)
+    <Location /verifier-mgmt/>
+        ProxyPass http://localhost:8083/management/
+        ProxyPassReverse http://localhost:8083/management/
+        Require ip ${AMIKO_WEB_IP:-65.109.136.203}
+    </Location>
 
     ErrorLog  \${APACHE_LOG_DIR}/swiyu-error.log
     CustomLog \${APACHE_LOG_DIR}/swiyu-access.log combined
@@ -718,7 +724,7 @@ print_summary() {
     echo ""
     echo -e "  ${CYAN}Verifier Service${NC}"
     echo    "    OID4VP:     http://localhost:8083"
-    echo    "    Management: http://localhost:8084/management/api/  (nur intern!)"
+    echo    "    Management: http://localhost:8083/management/api/  (Port 8083, NICHT 8084!)"
     echo    "    Swagger:    http://localhost:8083/swagger-ui/index.html"
     echo    "    Extern:     ${VERIFIER_EXTERNAL_URL}"
     echo ""
@@ -752,7 +758,7 @@ print_summary() {
     echo    "     echo '<offer_deeplink>' | qrencode -t ANSIUTF8"
     echo    ""
     echo    "  3. Verifikation erstellen:"
-    echo    "     curl -X POST http://localhost:8084/management/api/verifications \\"
+    echo    "     curl -X POST http://localhost:8083/management/api/verifications \\"
     echo    "          -H 'Content-Type: application/json' \\"
     echo    "          -d @${SETUP_DIR}/verifier/config/sample_verification_request.json"
     echo    ""
