@@ -89,7 +89,9 @@ ISSUER_SIGNING_KEY="-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY
 STATUS_LIST_SIGNING_KEY="-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY-----\n"
 STATUS_LIST_VERIFICATION_METHOD=${ISSUER_DID}#assert-key-01
 
-# Verifier DID (kann gleicher DID sein wie Issuer)
+# Verifier DID (MUSS gleicher DID sein wie Issuer – gleicher Key!)
+# ⚠ WICHTIG: VERIFIER_SIGNING_KEY muss identisch mit ISSUER_SIGNING_KEY sein.
+# Der Verifier signiert mit assert-key-01 (NICHT auth-key-01).
 VERIFIER_DID=${ISSUER_DID}
 VERIFIER_DID_VERIFICATION_METHOD=${ISSUER_DID}#assert-key-01
 VERIFIER_SIGNING_KEY="-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY-----\n"
@@ -139,13 +141,25 @@ Ab swiyu-issuer v2.1.1 sind **zwei** Konfigurationsdateien erforderlich:
   "credential_issuer": "https://swiyu.ywesee.com/issuer",
   "credential_endpoint": "https://swiyu.ywesee.com/issuer/oid4vci/api/credential",
   "nonce_endpoint": "https://swiyu.ywesee.com/issuer/oid4vci/api/nonce",
-  "credential_configurations_supported": { ... }
+  "display": [{ "name": "ywesee GmbH", "locale": "de-CH" }],
+  "credential_configurations_supported": {
+    "doctor-credential": {
+      "format": "vc+sd-jwt",
+      "cryptographic_binding_methods_supported": ["jwk"],
+      "proof_types_supported": {
+        "jwt": { "proof_signing_alg_values_supported": ["ES256"] }
+      },
+      ...
+    }
+  }
 }
 ```
 
 > **Wichtig:**
 > - `"version": "1.0"` ist Pflicht (nicht `"1"`, nicht weglassen)
 > - `"nonce_endpoint"` ist Pflicht
+> - `"cryptographic_binding_methods_supported": ["jwk"]` ist **Pflicht** für Key Binding – ohne dieses Feld generiert die iOS Wallet keinen Holder Key und das Credential enthält kein `cnf`-Claim
+> - `"proof_types_supported"` mit `"jwt"` und `"ES256"` ist Pflicht
 > - Beide Felder fehlen in der `sample.compose.yml` Vorlage → manuell ergänzen! Siehe [PR #228](https://github.com/swiyu-admin-ch/swiyu-issuer/pull/228).
 
 #### display Pflichtfeld in issuer_metadata.json
@@ -216,6 +230,18 @@ curl -s -X POST http://localhost:8080/management/api/credentials \
 ```bash
 echo "<offer_deeplink>" | qrencode -t ANSIUTF8
 ```
+
+> ⚠️ **Wichtig – Credential-Import mit Key Binding (Timing!)**
+>
+> Die swiyu Wallet generiert den Holder Key nur wenn die Benutzer-Session aktiv ist. Der Inactivity-Timeout beträgt **2 Minuten**. Nach Ablauf enthält das Credential kein `cnf`-Claim und Verifikationen mit Key Binding schlagen fehl.
+>
+> **Korrekter Ablauf:**
+> 1. QR-Code vorab auf dem Bildschirm bereitstellen
+> 2. In der swiyu Wallet PIN eingeben
+> 3. **Sofort** (< 30 Sekunden) auf **„Scannen"** tippen (interner Scanner der Wallet!)
+> 4. QR-Code scannen und „Hinzufügen" bestätigen
+>
+> ❌ **Nicht** die iPhone-Kamera-App oder eine externe Scanner-App verwenden – das sendet die Wallet in den Hintergrund und beendet die Session (`endSession()` → kein Key Binding).
 
 ---
 
@@ -401,6 +427,66 @@ curl -s -X POST \
 > **Voraussetzung:** `swiyucorebusiness_trust` im [API Self-Service Portal](https://selfservice.api.admin.ch) abonniert. Zugang beantragen bei: **swiyu@eid.admin.ch**
 
 ## Bekannte Fallstricke
+
+### Issuer und Verifier müssen denselben Signing Key verwenden
+
+Issuer und Verifier teilen sich denselben DID und dieselbe `assert-key-01` Verification Method. Deshalb **müssen beide denselben EC Private Key verwenden** – `VERIFIER_SIGNING_KEY` muss identisch mit `ISSUER_SIGNING_KEY` sein.
+
+Wenn der Verifier einen anderen Key hat, schlägt die Signaturverifikation in der Wallet fehl:
+```
+SecKeyVerifySignature failed: EC signature verification failed, no match
+invalidSignature → "Ungültiger Nachweis"
+```
+
+**Lösung:** `VERIFIER_SIGNING_KEY` = `ISSUER_SIGNING_KEY` (beide `assert-key-01`).
+
+### Verification Method: assert-key-01 (nicht auth-key-01)
+
+Beide Services müssen `#assert-key-01` als Verification Method verwenden. `auth-key-01` führt zu Signaturfehlern.
+
+```
+VERIFIER_DID_VERIFICATION_METHOD=did:tdw:...#assert-key-01   ✅
+VERIFIER_DID_VERIFICATION_METHOD=did:tdw:...#auth-key-01     ❌
+```
+
+### cryptographic_binding_methods_supported ist Pflicht für Key Binding
+
+Ohne `"cryptographic_binding_methods_supported": ["jwk"]` in der `issuer_metadata.json` generiert die iOS Wallet keinen Holder Key – das Credential enthält kein `cnf`-Claim und Verifikationen mit `kb-jwt_alg_values` schlagen fehl.
+
+**Symptom:** `holder_jwks IS NULL` in DB, Wallet zeigt „Ungültiger Nachweis" bei Verifikation.
+
+### Wallet Inactivity Timeout (2 Minuten)
+
+Die swiyu Wallet beendet die Session nach **2 Minuten** Inaktivität (`userInactivityTimeout = 60 * 2` in `AppScene.swift`). Abgelaufene Session → kein `LAContext` → kein Holder Key → Credential ohne Key Binding.
+
+**Symptom:** `holder_jwks IS NULL`, Issuer-Log zeigt `Proof must be provided`.
+
+**Lösung:** PIN eingeben und **sofort** mit dem internen Scannen-Button den QR-Code scannen.
+
+### QR-Code muss mit dem Wallet-internen Scanner gescannt werden
+
+iPhone-Kamera oder externe Apps zum Scannen → Wallet geht in den Hintergrund → `didEnterBackground()` → `endSession()` → Session beendet → kein Key Binding.
+
+**Lösung:** Immer den **„Scannen"-Button** in der swiyu Wallet selbst verwenden.
+
+### .env Dateien mit EC Keys – Docker Compose Parsing
+
+Docker Compose `.env`-Dateien können keine mehrzeiligen Werte und reagieren empfindlich auf `+`-Zeichen. EC Private Keys müssen als **eine Zeile** mit `\n` (escaped Newlines) gespeichert werden:
+
+```
+VERIFIER_SIGNING_KEY="-----BEGIN EC PRIVATE KEY-----\nMHcCAQEE...\n-----END EC PRIVATE KEY-----\n"
+```
+
+Falls die `.env` korrumpiert ist (echte Newlines im Key), mit Python reparieren:
+```python
+sudo python3 << 'EOF'
+with open('/opt/swiyu/verifier/.env') as f:
+    content = f.read()
+# ... manuell korrigieren, Key als eine Zeile mit \n schreiben
+EOF
+```
+
+
 
 ### display Pflichtfeld (Top-Level)
 

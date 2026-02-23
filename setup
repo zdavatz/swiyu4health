@@ -2,7 +2,7 @@
 # =============================================================================
 # swiyu Generic Issuer & Verifier – Setup-Script für Debian/Ubuntu
 # =============================================================================
-# Version: 2.0
+# Version: 2.1
 # Getestet: Februar 2026, swiyu-int (Integration-Umgebung)
 #
 # Voraussetzungen (müssen VOR diesem Script erfüllt sein):
@@ -65,9 +65,12 @@ VERIFIER_EXTERNAL_URL="${VERIFIER_EXTERNAL_URL:-https://${EXTERNAL_DOMAIN}/verif
 : "${STATUS_LIST_VERIFICATION_METHOD:?Bitte STATUS_LIST_VERIFICATION_METHOD setzen}"
 
 # ── Verifier-Schlüssel & DID ───────────────────────────────────────────────
+# ⚠ WICHTIG: Issuer und Verifier teilen denselben DID und Key (assert-key-01).
+# VERIFIER_SIGNING_KEY muss identisch mit ISSUER_SIGNING_KEY sein.
+# VERIFIER_DID_VERIFICATION_METHOD muss #assert-key-01 verwenden (nicht auth-key-01)!
 : "${VERIFIER_DID:?Bitte VERIFIER_DID setzen (did:tdw:...)}"
-: "${VERIFIER_DID_VERIFICATION_METHOD:?Bitte VERIFIER_DID_VERIFICATION_METHOD setzen}"
-: "${VERIFIER_SIGNING_KEY:?Bitte VERIFIER_SIGNING_KEY setzen}"
+: "${VERIFIER_DID_VERIFICATION_METHOD:?Bitte VERIFIER_DID_VERIFICATION_METHOD setzen (muss #assert-key-01 enden!)}"
+: "${VERIFIER_SIGNING_KEY:?Bitte VERIFIER_SIGNING_KEY setzen (muss gleich wie ISSUER_SIGNING_KEY sein!)}"
 
 # ── swiyu API-Credentials (aus dem API Self-Service Portal) ────────────────
 : "${SWIYU_PARTNER_ID:?Bitte SWIYU_PARTNER_ID setzen}"
@@ -215,6 +218,12 @@ write_issuer_metadata() {
       "format": "vc+sd-jwt",
       "vct": "${CREDENTIAL_VCT}",
       "credential_signing_alg_values_supported": ["ES256"],
+      "cryptographic_binding_methods_supported": ["jwk"],
+      "proof_types_supported": {
+        "jwt": {
+          "proof_signing_alg_values_supported": ["ES256"]
+        }
+      },
       "claims": {
         "firstName": {
           "display": [
@@ -440,7 +449,6 @@ services:
     volumes:
       - ./config/verifier_metadata.json:/config/verifier_metadata.json:ro
     ports:
-    ports:
       # OID4VP + Management API laufen beide auf Port 8080 intern -> 8083 extern
       # WICHTIG: Port 8081/8084 (separater Management-Port) ist in dieser Version NICHT aktiv!
       # Management API erreichbar via: http://localhost:8083/management/api/
@@ -489,6 +497,8 @@ EOF
     cat > "${SETUP_DIR}/verifier/.env" <<EOF
 # swiyu Verifier – Umgebungsvariablen
 # ACHTUNG: Geheimnisse – niemals in Git einchecken!
+# ⚠ WICHTIG: VERIFIER_SIGNING_KEY muss identisch mit ISSUER_SIGNING_KEY sein!
+# Issuer und Verifier teilen denselben DID und Key (assert-key-01).
 VERIFIER_IMAGE_TAG=${VERIFIER_IMAGE_TAG}
 VERIFIER_EXTERNAL_URL=${VERIFIER_EXTERNAL_URL}
 VERIFIER_DID=${VERIFIER_DID}
@@ -756,6 +766,11 @@ print_summary() {
     echo    ""
     echo    "  2. QR-Code für Wallet-Scan generieren (aus offer_deeplink):"
     echo    "     echo '<offer_deeplink>' | qrencode -t ANSIUTF8"
+    echo    ""
+    echo -e "  ${YELLOW}⚠ Key Binding – Timing beachten:${NC}"
+    echo    "     PIN eingeben → SOFORT (< 30s) mit Wallet-internem 'Scannen'-Button scannen!"
+    echo    "     Wallet Inactivity-Timeout = 2 Minuten → danach kein Key Binding möglich."
+    echo    "     NICHT die iPhone-Kamera verwenden – das beendet die Wallet-Session."
     echo    ""
     echo    "  3. Verifikation erstellen:"
     echo    "     curl -X POST http://localhost:8083/management/api/verifications \\"
