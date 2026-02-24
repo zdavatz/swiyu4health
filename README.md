@@ -294,7 +294,7 @@ Der Management-Endpunkt ist via Apache Reverse Proxy mit IP-Whitelist abgesicher
 
 ```
 https://swiyu.ywesee.com/verifier-mgmt/ → http://localhost:8083/management/
-Zugriff nur von: 65.109.136.203 (amiko.oddb.org)
+Zugriff nur von: 65.109.136.203 (amiko.oddb.org), 192.168.0.1 (lokales Testing)
 ```
 
 Apache-Config in `/etc/apache2/sites-enabled/swiyu.conf`:
@@ -303,6 +303,7 @@ Apache-Config in `/etc/apache2/sites-enabled/swiyu.conf`:
     ProxyPass http://localhost:8083/management/
     ProxyPassReverse http://localhost:8083/management/
     Require ip 65.109.136.203
+    Require ip 192.168.0.1
 </Location>
 ```
 

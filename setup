@@ -532,6 +532,7 @@ configure_apache() {
         ProxyPass http://localhost:8083/management/
         ProxyPassReverse http://localhost:8083/management/
         Require ip ${AMIKO_WEB_IP:-65.109.136.203}
+        Require ip 192.168.0.1
     </Location>
 
     ErrorLog  \${APACHE_LOG_DIR}/swiyu-error.log
