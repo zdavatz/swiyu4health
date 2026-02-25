@@ -290,27 +290,46 @@ curl -s -X POST http://localhost:8083/management/api/verifications \
 
 ### Von externem Server (z.B. amiko.oddb.org)
 
-Der Management-Endpunkt ist via Apache Reverse Proxy mit IP-Whitelist abgesichert:
+Der Management-Endpunkt ist via Apache Reverse Proxy abgesichert — Zugang per **IP-Whitelist** oder **API-Key**:
 
 ```
 https://swiyu.ywesee.com/verifier-mgmt/ → http://localhost:8083/management/
-Zugriff nur von: 65.109.136.203 (amiko.oddb.org), 192.168.0.1 (lokales Testing)
 ```
+
+**Zugang 1: IP-Whitelist** (Server-zu-Server mit fester IP)
+- 65.109.136.203 (amiko.oddb.org)
+- 192.168.0.1 (lokales Testing)
+
+**Zugang 2: API-Key** (Native Apps auf iOS/Android/macOS/Windows)
+- Header: `X-API-Key: <VERIFIER_MGMT_API_KEY>`
+- Key wird beim Setup automatisch generiert oder aus `.env` gelesen
 
 Apache-Config in `/etc/apache2/sites-enabled/swiyu.conf`:
 ```apache
 <Location /verifier-mgmt/>
     ProxyPass http://localhost:8083/management/
     ProxyPassReverse http://localhost:8083/management/
-    Require ip 65.109.136.203
-    Require ip 192.168.0.1
+    <RequireAny>
+        Require ip 65.109.136.203
+        Require ip 192.168.0.1
+        Require expr "%{HTTP:X-API-Key} == '<VERIFIER_MGMT_API_KEY>'"
+    </RequireAny>
 </Location>
 ```
 
-Test von amiko.oddb.org:
+Test von amiko.oddb.org (IP-Whitelist):
 ```bash
 curl -s -X POST https://swiyu.ywesee.com/verifier-mgmt/api/verifications \
   -H "Content-Type: application/json" \
+  -d '{"accepted_issuer_dids":[],"response_mode":"direct_post","presentation_definition":{"id":"test","input_descriptors":[]}}' \
+  | python3 -m json.tool
+```
+
+Test mit API-Key (von beliebiger IP):
+```bash
+curl -s -X POST https://swiyu.ywesee.com/verifier-mgmt/api/verifications \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <VERIFIER_MGMT_API_KEY>" \
   -d '{"accepted_issuer_dids":[],"response_mode":"direct_post","presentation_definition":{"id":"test","input_descriptors":[]}}' \
   | python3 -m json.tool
 ```

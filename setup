@@ -84,6 +84,11 @@ SWIYU_STATUS_REGISTRY_TOKEN_URL="${SWIYU_STATUS_REGISTRY_TOKEN_URL:-https://keym
 : "${SWIYU_STATUS_REGISTRY_CUSTOMER_SECRET:?Bitte SWIYU_STATUS_REGISTRY_CUSTOMER_SECRET setzen}"
 : "${SWIYU_STATUS_REGISTRY_BOOTSTRAP_REFRESH_TOKEN:?Bitte SWIYU_STATUS_REGISTRY_BOOTSTRAP_REFRESH_TOKEN setzen}"
 
+# ── Verifier Management API-Key (für native Apps ohne feste IP) ──────────
+# Wird automatisch generiert falls nicht in .env gesetzt.
+# Native Apps senden diesen Key als Header: X-API-Key: <key>
+VERIFIER_MGMT_API_KEY="${VERIFIER_MGMT_API_KEY:-$(openssl rand -hex 32)}"
+
 # ── Datenbank-Passwörter ───────────────────────────────────────────────────
 ISSUER_DB_PASSWORD="${ISSUER_DB_PASSWORD:-$(openssl rand -hex 24)}"
 VERIFIER_DB_PASSWORD="${VERIFIER_DB_PASSWORD:-$(openssl rand -hex 24)}"
@@ -526,18 +531,23 @@ configure_apache() {
     # Verifier OID4VP (öffentlich)
     ProxyPass        /verifier/ http://localhost:8083/
     ProxyPassReverse /verifier/ http://localhost:8083/
-    # Verifier Management API – NUR fuer amiko.oddb.org (IP-Whitelist)
-    # WICHTIG: Management laeuft auf Port 8083 (nicht 8084!)
-    <Location /verifier-mgmt/>
-        ProxyPass http://localhost:8083/management/
-        ProxyPassReverse http://localhost:8083/management/
-        Require ip ${AMIKO_WEB_IP:-65.109.136.203}
-        Require ip 192.168.0.1
-    </Location>
 
     ErrorLog  \${APACHE_LOG_DIR}/swiyu-error.log
     CustomLog \${APACHE_LOG_DIR}/swiyu-access.log combined
 </VirtualHost>
+
+# Verifier Management API – IP-Whitelist ODER API-Key (server scope, gilt fuer alle VHosts)
+# Server-zu-Server (z.B. amiko.oddb.org): IP-Whitelist
+# Native Apps (iOS/Android/macOS/Windows): X-API-Key Header
+<Location /verifier-mgmt/>
+    ProxyPass http://localhost:8083/management/
+    ProxyPassReverse http://localhost:8083/management/
+    <RequireAny>
+        Require ip ${AMIKO_WEB_IP:-65.109.136.203}
+        Require ip 192.168.0.1
+        Require expr "%{HTTP:X-API-Key} == '${VERIFIER_MGMT_API_KEY}'"
+    </RequireAny>
+</Location>
 EOF
     a2ensite swiyu.conf -q
     apache2ctl configtest
@@ -738,6 +748,13 @@ print_summary() {
     echo    "    Management: http://localhost:8083/management/api/  (Port 8083, NICHT 8084!)"
     echo    "    Swagger:    http://localhost:8083/swagger-ui/index.html"
     echo    "    Extern:     ${VERIFIER_EXTERNAL_URL}"
+    echo ""
+    echo -e "  ${CYAN}Verifier Management API-Zugang${NC}"
+    echo    "    IP-Whitelist:  ${AMIKO_WEB_IP:-65.109.136.203}, 192.168.0.1"
+    echo    "    API-Key:       ${VERIFIER_MGMT_API_KEY}"
+    echo    "    Verwendung:    curl -H 'X-API-Key: ${VERIFIER_MGMT_API_KEY}' \\"
+    echo    "                     https://${EXTERNAL_DOMAIN}/verifier-mgmt/api/verifications"
+    echo -e "    ${YELLOW}Diesen Key in .env als VERIFIER_MGMT_API_KEY speichern!${NC}"
     echo ""
     echo -e "  ${CYAN}Naechste Schritte${NC}"
     echo    "  -------------------------------------------------------------"
