@@ -234,6 +234,20 @@ Optionen:
 
 Voraussetzungen: `curl`, `jq`, `qrencode`
 
+**Alternativ mit curl (ohne Script):**
+
+```bash
+curl -s -X POST http://localhost:8080/management/api/credentials \
+  -H "Content-Type: application/json" \
+  -d '{"metadata_credential_supported_id":["doctor-credential"],
+       "credential_valid_from":"2026-01-01T00:00:00Z",
+       "credential_valid_until":"2030-01-01T00:00:00Z",
+       "offer_validity_seconds":86400,
+       "credential_subject_data":{"firstName":"Hans","lastName":"Muster","gln":"7601000000000"}}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['offer_deeplink'])" \
+  | qrencode -t UTF8
+```
+
 > ⚠️ **Wichtig – Credential-Import mit Key Binding (Timing!)**
 >
 > Die swiyu Wallet generiert den Holder Key nur wenn die Benutzer-Session aktiv ist. Der Inactivity-Timeout beträgt **2 Minuten**. Nach Ablauf enthält das Credential kein `cnf`-Claim und Verifikationen mit Key Binding schlagen fehl.
