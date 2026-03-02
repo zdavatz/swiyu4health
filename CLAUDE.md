@@ -8,6 +8,7 @@ swiyu4health is an infrastructure-as-code repository for deploying a **swiyu Gen
 
 The repository contains no application source code. All business logic lives in upstream Docker images. This repo provides:
 - `setup` — a Bash script (~1100 lines) that automates the full deployment on Debian/Ubuntu
+- `create_credential` — a Bash script to issue credentials and display QR codes (requires `curl`, `jq`, `qrencode`)
 - `README.md` — comprehensive documentation in German with troubleshooting
 - `.env` — credentials and configuration (not committed)
 
@@ -50,6 +51,10 @@ sudo docker compose -f /opt/swiyu/issuer/docker-compose.yml --env-file /opt/swiy
 
 # Check metadata
 curl -s https://swiyu.ywesee.com/issuer/.well-known/openid-credential-issuer | python3 -m json.tool
+
+# Issue credential and show QR code
+./create_credential --first-name Hans --last-name Muster --gln 7601000000000 --valid-year
+./create_credential --first-name Hans --last-name Muster --gln 7601000000000 --valid-month
 ```
 
 There are no tests, linters, or CI/CD pipelines.

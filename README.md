@@ -204,32 +204,35 @@ volumes:
   - ./config/openid_metadata.json:/config/openid_metadata.json:ro  # NEU!
 ```
 
-### 2. Credential erstellen
+### 2. Credential erstellen und QR-Code anzeigen
+
+Das Script `create_credential` erstellt ein Credential und zeigt den QR-Code direkt an:
 
 ```bash
-STATUS_REGISTRY_URL="https://status-reg.trust-infra.swiyu-int.admin.ch/api/v1/statuslist/<id>.jwt"
+# Credential gültig für 1 Jahr (ab jetzt)
+./create_credential --first-name Hans --last-name Muster --gln 7601000000000 --valid-year
 
-curl -s -X POST http://localhost:8080/management/api/credentials \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"metadata_credential_supported_id\": [\"doctor-credential\"],
-    \"credential_subject_data\": {
-      \"firstName\": \"Hans\",
-      \"lastName\": \"Muster\",
-      \"gln\": \"7601000000000\"
-    },
-    \"offer_validity_seconds\": 86400,
-    \"credential_valid_until\": \"2030-01-01T00:00:00Z\",
-    \"credential_valid_from\": \"2026-01-01T00:00:00Z\",
-    \"status_lists\": [\"${STATUS_REGISTRY_URL}\"]
-  }" | python3 -m json.tool
+# Credential gültig für 1 Monat (ab jetzt)
+./create_credential --first-name Anna --last-name Beispiel --gln 7601000000001 --valid-month
+
+# Credential mit explizitem Zeitraum
+./create_credential --first-name Hans --last-name Muster --gln 7601000000000 \
+    --valid-from 2026-06-01T00:00:00Z --valid-till 2028-01-01T00:00:00Z
 ```
 
-### 3. QR-Code für swiyu Wallet
+Optionen:
+| Option | Beschreibung |
+|--------|-------------|
+| `--first-name` | Vorname (Pflicht) |
+| `--last-name` | Nachname (Pflicht) |
+| `--gln` | GLN-Nummer (Pflicht) |
+| `--valid-month` | Gültig ab jetzt für 1 Monat |
+| `--valid-year` | Gültig ab jetzt für 1 Jahr (Standard) |
+| `--valid-from` | Gültig ab (ISO 8601) |
+| `--valid-till` | Gültig bis (ISO 8601) |
+| `--issuer-url` | Issuer URL (Standard: http://localhost:8080) |
 
-```bash
-echo "<offer_deeplink>" | qrencode -t ANSIUTF8
-```
+Voraussetzungen: `curl`, `jq`, `qrencode`
 
 > ⚠️ **Wichtig – Credential-Import mit Key Binding (Timing!)**
 >
