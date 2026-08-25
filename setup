@@ -197,6 +197,36 @@ create_directories() {
         "${SETUP_DIR}/verifier/data"
     chmod 750 "${SETUP_DIR}/issuer" "${SETUP_DIR}/verifier"
     success "Verzeichnisse erstellt."
+    write_logo
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOGO – von Wallet und Verifier ueber logo_uri geladen
+# ─────────────────────────────────────────────────────────────────────────────
+# issuer_metadata.json und verifier_metadata.json verweisen auf
+# https://${EXTERNAL_DOMAIN}/logo.png. Fehlt die Datei, liefert Apache 404.
+# Legt einen einfarbigen Platzhalter an, falls noch keines vorhanden ist –
+# ein echtes Logo einfach an dieselbe Stelle kopieren.
+write_logo() {
+    local docroot="/var/www/html"
+    [[ -d "${docroot}" ]] || return 0
+    [[ -s "${docroot}/logo.png" ]] && return 0
+    info "Lege Platzhalter-Logo an (${docroot}/logo.png)..."
+    python3 - "${docroot}/logo.png" <<'PYEOF' || { warn "Logo konnte nicht erzeugt werden."; return 0; }
+import struct, sys, zlib
+size = 256
+rows = b"".join(b"\x00" + bytes([0x00, 0x3d, 0x73, 0xff] * size) for _ in range(size))
+def chunk(tag, data):
+    return (struct.pack(">I", len(data)) + tag + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xffffffff))
+png = (b"\x89PNG\r\n\x1a\n"
+       + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+       + chunk(b"IDAT", zlib.compress(rows, 9))
+       + chunk(b"IEND", b""))
+open(sys.argv[1], "wb").write(png)
+PYEOF
+    chmod 644 "${docroot}/logo.png"
+    success "Platzhalter-Logo erstellt."
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -382,6 +412,14 @@ services:
       POSTGRES_PASSWORD: \${ISSUER_DB_PASSWORD}
       # Öffentliche URL
       EXTERNAL_URL: \${ISSUER_EXTERNAL_URL}
+      # Ab Issuer 3.2.0 sind DPoP und Verschluesselung der Credential-Anfrage
+      # standardmaessig Pflicht. Mit DPoP-Zwang bricht die swiyu Wallet 1.17
+      # nach POST /oid4vci/api/nonce mit "use_dpop_nonce" ab, mit
+      # encryption_required stellt sie die Credential-Anfrage gar nicht erst.
+      # Beides deshalb abschaltbar – Standard hier aus, bis der Handshake
+      # mit der Wallet nachweislich funktioniert.
+      APPLICATION_DPOP_ENFORCE: \${APPLICATION_DPOP_ENFORCE:-false}
+      APPLICATION_ENCRYPTION_ENFORCE: \${APPLICATION_ENCRYPTION_ENFORCE:-false}
       # DID & Schlüssel (offizielle Variablennamen laut swiyu-issuer Doku)
       ISSUER_ID: \${ISSUER_DID}
       DID_SDJWT_VERIFICATION_METHOD: \${ISSUER_DID_VERIFICATION_METHOD}
@@ -507,6 +545,8 @@ ISSUER_SIGNING_KEY=${ISSUER_SIGNING_KEY}
 STATUS_LIST_SIGNING_KEY=${STATUS_LIST_SIGNING_KEY}
 STATUS_LIST_VERIFICATION_METHOD=${STATUS_LIST_VERIFICATION_METHOD}
 ISSUER_DB_PASSWORD=${ISSUER_DB_PASSWORD}
+APPLICATION_DPOP_ENFORCE=${APPLICATION_DPOP_ENFORCE:-false}
+APPLICATION_ENCRYPTION_ENFORCE=${APPLICATION_ENCRYPTION_ENFORCE:-false}
 SWIYU_PARTNER_ID=${SWIYU_PARTNER_ID}
 SWIYU_STATUS_REGISTRY_API_URL=${SWIYU_STATUS_REGISTRY_API_URL}
 SWIYU_STATUS_REGISTRY_TOKEN_URL=${SWIYU_STATUS_REGISTRY_TOKEN_URL}
@@ -593,6 +633,16 @@ EOF
             sed -i "s|</VirtualHost>|    ErrorLog  \${APACHE_LOG_DIR}/swiyu-error.log\n    CustomLog \${APACHE_LOG_DIR}/swiyu-access.log combined\n</VirtualHost>|" "${ssl_conf}"
             systemctl reload apache2
             success "Access-Log in SSL-Konfiguration eingefügt."
+        fi
+        # OID4VCI verlangt das well-known an der Wurzel mit angehaengtem
+        # Issuer-Pfad. Die Wallet fragt zuerst
+        #   /.well-known/openid-credential-issuer/issuer
+        # und faellt erst danach auf /issuer/.well-known/... zurueck.
+        if [[ -n "${ssl_conf}" ]] && ! grep -q "openid-credential-issuer/issuer" "${ssl_conf}"; then
+            a2enmod rewrite -q || true
+            sed -i "s|</VirtualHost>|    RewriteEngine On\n    RewriteRule ^/\\\\.well-known/openid-credential-issuer/issuer\$ /issuer/.well-known/openid-credential-issuer [PT,L]\n</VirtualHost>|" "${ssl_conf}"
+            systemctl reload apache2
+            success "OID4VCI-Rewrite in SSL-Konfiguration eingefügt."
         fi
     else
         warn "certbot fehlgeschlagen – manuell ausführen:"

@@ -23,7 +23,7 @@ Apache Reverse Proxy (TLS, swiyu.ywesee.com)
     └─ /verifier-mgmt/ → port 8083/management (IP-whitelist: 65.109.136.203, 65.109.163.188, 192.168.0.1 — or X-API-Key)
 ```
 
-- **Issuer (OID4VCI):** Issues SD-JWT verifiable credentials via `ghcr.io/swiyu-admin-ch/swiyu-issuer:2.1.1`
+- **Issuer (OID4VCI):** Issues SD-JWT verifiable credentials via `ghcr.io/swiyu-admin-ch/swiyu-issuer:4.1.0-unhardened`
 - **Verifier (OID4VP):** Verifies credentials via `ghcr.io/swiyu-admin-ch/swiyu-verifier:4.1.2-unhardened`
 - Both share the **same DID**, but **different keys**: the issuer signs credentials with `assert-key-01` (`assertionMethod`), the verifier signs authorization requests with `auth-key-01` (`authentication`)
 - Deployed to `/opt/swiyu/{issuer,verifier}/` with systemd units
@@ -69,8 +69,12 @@ There are no tests, linters, or CI/CD pipelines.
 5. **EC keys in .env:** Must be single-line with `\n` escapes, **in double quotes**. `setup` writes them unquoted into `/opt/swiyu/*/.env` because it loads `.env` via `export "$line"` without quote removal — the quotes are already part of the value. Do not add another pair
 6. **No `EnvironmentFile=` in the systemd units:** systemd does not expand the `\n` escapes and its process environment wins over the `.env` that `docker compose` parses correctly. Result would be `No PEM-encoded keys found`. The units pass `--env-file` to compose instead
 7. **DB passwords must be preserved across `setup` runs:** `POSTGRES_PASSWORD` only applies when the volume is first initialised. A freshly generated password leaves the role unchanged and both services crash-loop with `password authentication failed`. `setup` now reads the deployed value first
-8. **iOS Wallet mandatory metadata fields:** `version: "1.0"`, `display` array, `nonce_endpoint`, `cryptographic_binding_methods_supported: ["jwk"]` — missing any causes silent "Ungültiger Nachweis" failure
-9. **Wallet 2-min timeout:** Must scan QR with wallet's internal scanner within 2 minutes of PIN entry, otherwise no Key Binding (`cnf` claim missing)
+8. **Issuer 3.2.0+ enforces DPoP and request encryption by default:** with `application.dpop-enforce=true` the wallet aborts after `POST /oid4vci/api/nonce` showing `use_dpop_nonce`; with `encryption_required: true` it never calls the credential endpoint at all. Both are switched off via `APPLICATION_DPOP_ENFORCE` / `APPLICATION_ENCRYPTION_ENFORCE` in the issuer `.env` — turn them back on one at a time and re-test issuance
+9. **The OID4VCI well-known lives at the root:** wallets first request `/.well-known/openid-credential-issuer/<issuer-path>` and only then fall back to `/<issuer-path>/.well-known/openid-credential-issuer`. `setup` installs a `RewriteRule` in the HTTPS vhost for this; without it the first request 404s
+10. **`logo_uri` must resolve:** `issuer_metadata.json` and `verifier_metadata.json` both point at `https://<domain>/logo.png`. `setup` writes a placeholder to `/var/www/html/logo.png`; replace it with a real logo, but never let it 404
+11. **Metadata `version` was replaced by `profile_version`:** the 4.x issuer rebuilds the metadata itself and emits `profile_version` (Swiss Profile) instead of the `version: "1.0"` field older wallets required. The `version` key in `issuer_metadata.json` is ignored — that is expected, not a defect
+12. **iOS Wallet mandatory metadata fields:** `display` array, `nonce_endpoint`, `cryptographic_binding_methods_supported: ["jwk"]` — missing any causes silent "Ungültiger Nachweis" failure
+13. **Wallet 2-min timeout:** Must scan QR with wallet's internal scanner within 2 minutes of PIN entry, otherwise no Key Binding (`cnf` claim missing)
 
 ## Debugging the Wallet Flow
 
@@ -79,6 +83,18 @@ The wallet reports every rejected authorization request as a bare `invalid_reque
 - **Apache access log:** `/var/log/apache2/swiyu-access.log`. If empty, check `other_vhosts_access.log` — the HTTPS vhost `swiyu-le-ssl.conf` only logs to the dedicated file since `setup` injects `CustomLog` there. Two `<VirtualHost *:443>` with the same `ServerName` exist; `swiyu-le-ssl.conf` wins (loads first alphabetically) and `swiyu.conf`'s vhost block is ignored
 - **Reading the pattern:** `GET …/request-object/<id>` followed by `POST …/response-data` means the wallet submitted and the reason is in the verifier log. A `GET` with no `POST` means the wallet rejected the request object itself — the fault is then in the request object's content, not the credential
 - **Ground truth:** `select state, count(*) from management group by 1;` in `swiyu-verifier-db`. Only `PENDING` rows means no wallet ever submitted anything
+- **Issuance has its own chain**, visible in the same log: metadata → `oauth-authorization-server` → `POST /oid4vci/api/token` → `POST /oid4vci/api/nonce` → `POST /oid4vci/api/credential`. Whichever step is missing is where the wallet gave up
+- **Version skew is the first thing to check**, not the last. Compare the running image label against the registry before suspecting configuration — see the `:stable` constraint above
+
+## Presented Claims (DCQL)
+
+With DCQL the verifier groups the presented claims by query id and wraps them in an array, because one query can match several credentials:
+
+```json
+"credential_subject_data": { "doctor_credential": [ { "vct": "...", "gln": "...", "cnf": {...} } ] }
+```
+
+The old `presentation_definition` flow returned the claims flat. Consumers must handle the nesting — `ch.oddb.org` does so in `SwiyuMiddleware#extract_claims`.
 
 ## Editing the Setup Script
 

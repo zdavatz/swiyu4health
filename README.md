@@ -98,8 +98,13 @@ VERIFIER_DID_VERIFICATION_METHOD=${ISSUER_DID}#auth-key-01
 VERIFIER_SIGNING_KEY="-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY-----\n"
 
 # Docker-Image-Versionen – NIEMALS "stable" verwenden (siehe Fallstricke)
-ISSUER_IMAGE_TAG=2.1.1
+ISSUER_IMAGE_TAG=4.1.0-unhardened
 VERIFIER_IMAGE_TAG=4.1.2-unhardened
+
+# Ab Issuer 3.2.0 sind DPoP und Verschlüsselung der Credential-Anfrage Pflicht.
+# Die swiyu Wallet 1.17 kommt damit derzeit nicht durch – siehe Fallstricke.
+APPLICATION_DPOP_ENFORCE=false
+APPLICATION_ENCRYPTION_ENFORCE=false
 
 # swiyu API (aus API Self-Service Portal)
 SWIYU_PARTNER_ID=<business_partner_uuid>
@@ -405,6 +410,16 @@ Das Muster im Access-Log ist entscheidend:
 | nur `GET`, kein `POST` | Wallet verwirft das Request-Object selbst → Fehler liegt in dessen Inhalt, nicht am Credential |
 | gar kein Eintrag | Wallet erreicht den Server nicht – oder du schaust ins falsche Logfile |
 
+Für die **Ausstellung** gilt dieselbe Logik, nur mit längerer Kette. Wo sie abbricht, liegt der Fehler:
+
+```
+GET  /issuer/<offer>/.well-known/openid-credential-issuer
+GET  /issuer/<offer>/.well-known/oauth-authorization-server
+POST /issuer/oid4vci/api/token
+POST /issuer/oid4vci/api/nonce
+POST /issuer/oid4vci/api/credential
+```
+
 Nur `PENDING`-Zeilen in der Datenbank heisst: Es gab noch nie eine erfolgreiche Verifikation.
 
 Signatur des Request-Objects gegen das DID-Dokument prüfen:
@@ -543,6 +558,39 @@ curl -s -H "Authorization: Bearer $T" \
 
 Ab 3.0.0 sind die Images gehärtet (kein Shell, `nonroot`). Wer das nicht migrieren will, nutzt die `-unhardened`-Variante.
 
+### Issuer ab 3.2.0 erzwingt DPoP und Verschlüsselung
+
+Beides wurde mit 3.2.0 zur Voreinstellung. Gegen die swiyu Wallet 1.17 scheitert die Ausstellung damit an zwei Stellen:
+
+| Zwang | Symptom in der Wallet | Im Log sichtbar als |
+|---|---|---|
+| `application.dpop-enforce` | „Etwas ist schiefgelaufen – `use_dpop_nonce`" | `POST /oid4vci/api/token` → 400, zweimal |
+| `encryption_required` | „Ungültiger Nachweis" | Ablauf endet nach `POST /oid4vci/api/nonce`, kein `…/credential` |
+
+Abschaltbar über die `.env`:
+
+```bash
+APPLICATION_DPOP_ENFORCE=false
+APPLICATION_ENCRYPTION_ENFORCE=false
+```
+
+Beides sind **Sicherheitsmerkmale** – DPoP bindet das Access Token an den Wallet-Schlüssel. Nach jedem Wallet-Update einzeln wieder einschalten und die Ausstellung erneut testen.
+
+### well-known-Pfad an der Wurzel
+
+Die Wallet fragt zuerst den spezifikationskonformen Pfad ab und erst danach den Fallback:
+
+```
+GET /.well-known/openid-credential-issuer/issuer   ← ohne RewriteRule: 404
+GET /issuer/.well-known/openid-credential-issuer   ← Fallback
+```
+
+`setup` trägt die passende `RewriteRule` in den HTTPS-vHost ein und aktiviert `mod_rewrite`.
+
+### logo_uri muss erreichbar sein
+
+Issuer- und Verifier-Metadaten verweisen auf `https://${EXTERNAL_DOMAIN}/logo.png`. `setup` legt einen einfarbigen Platzhalter unter `/var/www/html/logo.png` an. Ein echtes Logo einfach an dieselbe Stelle kopieren – nur 404 darf es nie liefern.
+
 ### Verifier ab 4.x akzeptiert nur noch DCQL
 
 `presentation_definition` wird abgewiesen:
@@ -567,6 +615,28 @@ Stattdessen `dcql_query` senden (OID4VP 1.0):
 ```
 
 Die `id` muss `^[a-zA-Z0-9_-]+$` erfüllen – Bindestriche in `doctor-credential` sind erlaubt, Punkte nicht.
+
+**Die Antwortstruktur ändert sich dadurch ebenfalls.** Der Verifier gruppiert die präsentierten Claims nach der Query-`id` und verpackt sie in ein Array, weil eine Abfrage mehrere passende Nachweise liefern kann:
+
+```json
+"credential_subject_data": {
+  "doctor_credential": [
+    {"vct": "doctor-credential-sdjwt", "gln": "...", "firstName": "...", "cnf": {"jwk": {...}}}
+  ]
+}
+```
+
+Der `presentation_definition`-Ablauf lieferte die Claims flach. Wer sie weiterverarbeitet, muss beide Formen behandeln – `ch.oddb.org` tut das in `SwiyuMiddleware#extract_claims`.
+
+### Wallet erzwingt verschlüsselte Antworten
+
+Ab Wallet 1.17 („payload encryption enforcement during presentations") wird `response_mode: direct_post` mit `invalid_request` abgelehnt, **bevor** die Wallet irgendetwas einreicht. Der Verifier sieht davon nichts, alle Verifikationen bleiben auf `PENDING`.
+
+```json
+{"response_mode": "direct_post.jwt"}
+```
+
+Damit legt der Verifier ein `jwks` mit dem öffentlichen Verschlüsselungsschlüssel in die `client_metadata`, und die Wallet akzeptiert die Anfrage.
 
 ### DB-Passwörter dürfen bei `setup`-Läufen nicht neu erzeugt werden
 
