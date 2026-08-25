@@ -65,12 +65,14 @@ VERIFIER_EXTERNAL_URL="${VERIFIER_EXTERNAL_URL:-https://${EXTERNAL_DOMAIN}/verif
 : "${STATUS_LIST_VERIFICATION_METHOD:?Bitte STATUS_LIST_VERIFICATION_METHOD setzen}"
 
 # ── Verifier-Schlüssel & DID ───────────────────────────────────────────────
-# ⚠ WICHTIG: Issuer und Verifier teilen denselben DID und Key (assert-key-01).
-# VERIFIER_SIGNING_KEY muss identisch mit ISSUER_SIGNING_KEY sein.
-# VERIFIER_DID_VERIFICATION_METHOD muss #assert-key-01 verwenden (nicht auth-key-01)!
+# ⚠ WICHTIG: Issuer und Verifier teilen denselben DID, aber NICHT denselben Key.
+# Das DID-Dokument trennt die Relationen:
+#   authentication  -> auth-key-01    Autorisierungsanfragen (Verifier)
+#   assertionMethod -> assert-key-01  Credentials signieren (Issuer, Statusliste)
+# Der Verifier muss daher mit #auth-key-01 signieren.
 : "${VERIFIER_DID:?Bitte VERIFIER_DID setzen (did:tdw:...)}"
-: "${VERIFIER_DID_VERIFICATION_METHOD:?Bitte VERIFIER_DID_VERIFICATION_METHOD setzen (muss #assert-key-01 enden!)}"
-: "${VERIFIER_SIGNING_KEY:?Bitte VERIFIER_SIGNING_KEY setzen (muss gleich wie ISSUER_SIGNING_KEY sein!)}"
+: "${VERIFIER_DID_VERIFICATION_METHOD:?Bitte VERIFIER_DID_VERIFICATION_METHOD setzen (muss #auth-key-01 enden!)}"
+: "${VERIFIER_SIGNING_KEY:?Bitte VERIFIER_SIGNING_KEY setzen (privater Schluessel zu auth-key-01)}"
 
 # ── swiyu API-Credentials (aus dem API Self-Service Portal) ────────────────
 : "${SWIYU_PARTNER_ID:?Bitte SWIYU_PARTNER_ID setzen}"
@@ -90,12 +92,27 @@ SWIYU_STATUS_REGISTRY_TOKEN_URL="${SWIYU_STATUS_REGISTRY_TOKEN_URL:-https://keym
 VERIFIER_MGMT_API_KEY="${VERIFIER_MGMT_API_KEY:-$(openssl rand -hex 32)}"
 
 # ── Datenbank-Passwörter ───────────────────────────────────────────────────
+# ACHTUNG: Ein neu gewuerfeltes Passwort ist fuer ein bestehendes Deployment
+# fatal – POSTGRES_PASSWORD wirkt nur bei der Erstinitialisierung des Volumes,
+# die Rolle in der DB behaelt ihr altes Passwort und die Dienste kommen nicht
+# mehr hoch. Deshalb zuerst den Wert aus dem laufenden Deployment uebernehmen.
+read_deployed_pw() {  # $1 = Variablenname, $2 = Pfad zur deployten .env
+    [[ -r "$2" ]] || return 0
+    sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}$/\1/p" "$2" | head -1
+}
+ISSUER_DB_PASSWORD="${ISSUER_DB_PASSWORD:-$(read_deployed_pw ISSUER_DB_PASSWORD "${SETUP_DIR}/issuer/.env")}"
+VERIFIER_DB_PASSWORD="${VERIFIER_DB_PASSWORD:-$(read_deployed_pw VERIFIER_DB_PASSWORD "${SETUP_DIR}/verifier/.env")}"
 ISSUER_DB_PASSWORD="${ISSUER_DB_PASSWORD:-$(openssl rand -hex 24)}"
 VERIFIER_DB_PASSWORD="${VERIFIER_DB_PASSWORD:-$(openssl rand -hex 24)}"
 
 # ── Docker-Image-Tags ──────────────────────────────────────────────────────
-ISSUER_IMAGE_TAG="${ISSUER_IMAGE_TAG:-stable}"
-VERIFIER_IMAGE_TAG="${VERIFIER_IMAGE_TAG:-stable}"
+# ACHTUNG: Das Tag "stable" wird vom Upstream nicht gepflegt – es zeigte im
+# August 2026 noch auf 2.1.2 (Dezember 2025), waehrend 4.x aktuell war.
+# 2.1.2 sendet kein profile_version im JAR-Header (ab 2.3.0, Issue #694);
+# aktuelle Wallets lehnen solche Autorisierungsanfragen mit invalid_request ab.
+# Deshalb feste Versionen pinnen und bewusst anheben.
+ISSUER_IMAGE_TAG="${ISSUER_IMAGE_TAG:-2.1.1}"
+VERIFIER_IMAGE_TAG="${VERIFIER_IMAGE_TAG:-2.3.3}"
 
 # ── Credential-Typ ─────────────────────────────────────────────────────────
 CREDENTIAL_TYPE="${CREDENTIAL_TYPE:-doctor-credential}"
@@ -352,7 +369,7 @@ services:
       - issuer-internal
 
   swiyu-issuer-service:
-    image: ghcr.io/swiyu-admin-ch/swiyu-issuer:\${ISSUER_IMAGE_TAG:-stable}
+    image: ghcr.io/swiyu-admin-ch/swiyu-issuer:\${ISSUER_IMAGE_TAG:-2.1.1}
     container_name: swiyu-issuer-service
     restart: unless-stopped
     depends_on:
@@ -431,7 +448,7 @@ services:
       - verifier-internal
 
   swiyu-verifier:
-    image: ghcr.io/swiyu-admin-ch/swiyu-verifier:\${VERIFIER_IMAGE_TAG:-stable}
+    image: ghcr.io/swiyu-admin-ch/swiyu-verifier:\${VERIFIER_IMAGE_TAG:-2.3.3}
     container_name: swiyu-verifier
     restart: unless-stopped
     depends_on:
@@ -502,8 +519,8 @@ EOF
     cat > "${SETUP_DIR}/verifier/.env" <<EOF
 # swiyu Verifier – Umgebungsvariablen
 # ACHTUNG: Geheimnisse – niemals in Git einchecken!
-# ⚠ WICHTIG: VERIFIER_SIGNING_KEY muss identisch mit ISSUER_SIGNING_KEY sein!
-# Issuer und Verifier teilen denselben DID und Key (assert-key-01).
+# ⚠ WICHTIG: VERIFIER_SIGNING_KEY ist der Schluessel zu #auth-key-01
+# (DID-Relation authentication) – NICHT derselbe wie ISSUER_SIGNING_KEY.
 VERIFIER_IMAGE_TAG=${VERIFIER_IMAGE_TAG}
 VERIFIER_EXTERNAL_URL=${VERIFIER_EXTERNAL_URL}
 VERIFIER_DID=${VERIFIER_DID}
@@ -544,6 +561,7 @@ configure_apache() {
     ProxyPassReverse http://localhost:8083/management/
     <RequireAny>
         Require ip ${AMIKO_WEB_IP:-65.109.136.203}
+        Require ip ${ODDB_WEB_IP:-65.109.163.188}
         Require ip 192.168.0.1
         Require expr "%{HTTP:X-API-Key} == '${VERIFIER_MGMT_API_KEY}'"
     </RequireAny>
@@ -560,11 +578,21 @@ EOF
         success "TLS-Zertifikat erstellt."
         # ProxyPass in SSL-Config eintragen falls noch nicht vorhanden
         local ssl_conf
-        ssl_conf=$(find /etc/apache2/sites-available -name "*le-ssl*" 2>/dev/null | head -1)
+        # ACHTUNG: nur die swiyu-SSL-Config anfassen. Ein blosses "*le-ssl*"
+        # trifft unsortiert auch fremde vHosts (z.B. game.ywesee.com).
+        ssl_conf="/etc/apache2/sites-available/swiyu-le-ssl.conf"
+        [[ -f "${ssl_conf}" ]] || ssl_conf=$(find /etc/apache2/sites-available -name "swiyu*le-ssl*" 2>/dev/null | head -1)
         if [[ -n "${ssl_conf}" ]] && ! grep -q "ProxyPass" "${ssl_conf}"; then
             sed -i "s|</VirtualHost>|    ProxyPreserveHost On\n    ProxyPass        /issuer/   http://localhost:8080/\n    ProxyPassReverse /issuer/   http://localhost:8080/\n    ProxyPass        /verifier/ http://localhost:8083/\n    ProxyPassReverse /verifier/ http://localhost:8083/\n\n</VirtualHost>|" "${ssl_conf}"
             systemctl reload apache2
             success "Proxy-Einträge in SSL-Konfiguration eingefügt."
+        fi
+        # Access-Log im HTTPS-vHost – ohne das landet aller Wallet-Traffic in
+        # /var/log/apache2/other_vhosts_access.log statt in swiyu-access.log
+        if [[ -n "${ssl_conf}" ]] && ! grep -q "swiyu-access.log" "${ssl_conf}"; then
+            sed -i "s|</VirtualHost>|    ErrorLog  \${APACHE_LOG_DIR}/swiyu-error.log\n    CustomLog \${APACHE_LOG_DIR}/swiyu-access.log combined\n</VirtualHost>|" "${ssl_conf}"
+            systemctl reload apache2
+            success "Access-Log in SSL-Konfiguration eingefügt."
         fi
     else
         warn "certbot fehlgeschlagen – manuell ausführen:"
@@ -589,9 +617,12 @@ After=docker.service network-online.target
 [Service]
 Type=simple
 WorkingDirectory=${dir}
-EnvironmentFile=${dir}/.env
-ExecStart=/usr/bin/docker compose up --remove-orphans
-ExecStop=/usr/bin/docker compose down
+# Bewusst KEIN EnvironmentFile: systemd expandiert die \n-Escapes in den
+# EC-Schluesseln nicht, und seine Prozess-Umgebung haette Vorrang vor der
+# .env, die docker compose selbst korrekt parst (echte Zeilenumbrueche).
+# Folge waere: "No PEM-encoded keys found" beim Signieren.
+ExecStart=/usr/bin/docker compose --env-file ${dir}/.env up --remove-orphans
+ExecStop=/usr/bin/docker compose --env-file ${dir}/.env down
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
@@ -614,7 +645,11 @@ start_services() {
 
     for svc in issuer verifier; do
         info "  → swiyu-${svc}..."
-        systemctl enable --now "swiyu-${svc}.service"
+        # enable --now startet nur inaktive Dienste. Beim Re-Run laufen sie
+        # bereits und wuerden mit der alten Konfiguration weiterlaufen –
+        # deshalb zusaetzlich restart, damit Metadata-Aenderungen greifen.
+        systemctl enable "swiyu-${svc}.service" -q
+        systemctl restart "swiyu-${svc}.service"
     done
 
     info "Warte 30 Sekunden auf Initialisierung..."
@@ -750,7 +785,7 @@ print_summary() {
     echo    "    Extern:     ${VERIFIER_EXTERNAL_URL}"
     echo ""
     echo -e "  ${CYAN}Verifier Management API-Zugang${NC}"
-    echo    "    IP-Whitelist:  ${AMIKO_WEB_IP:-65.109.136.203}, 192.168.0.1"
+    echo    "    IP-Whitelist:  ${AMIKO_WEB_IP:-65.109.136.203}, ${ODDB_WEB_IP:-65.109.163.188}, 192.168.0.1"
     echo    "    API-Key:       ${VERIFIER_MGMT_API_KEY}"
     echo    "    Verwendung:    curl -H 'X-API-Key: ${VERIFIER_MGMT_API_KEY}' \\"
     echo    "                     https://${EXTERNAL_DOMAIN}/verifier-mgmt/api/verifications"

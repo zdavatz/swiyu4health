@@ -1,0 +1,7 @@
+# Geheimnisse – enthalten private EC-Schlüssel, DB-Passwörter und API-Tokens
+.env
+.env.bak*
+.env.bak2-*
+
+# didtoolbox-Ausgaben
+.didtoolbox/

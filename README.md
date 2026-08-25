@@ -89,12 +89,17 @@ ISSUER_SIGNING_KEY="-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY
 STATUS_LIST_SIGNING_KEY="-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY-----\n"
 STATUS_LIST_VERIFICATION_METHOD=${ISSUER_DID}#assert-key-01
 
-# Verifier DID (MUSS gleicher DID sein wie Issuer – gleicher Key!)
-# ⚠ WICHTIG: VERIFIER_SIGNING_KEY muss identisch mit ISSUER_SIGNING_KEY sein.
-# Der Verifier signiert mit assert-key-01 (NICHT auth-key-01).
+# Verifier DID (gleicher DID wie Issuer – aber ANDERER Key!)
+# ⚠ WICHTIG: Der Verifier signiert Autorisierungsanfragen und braucht deshalb
+# den Schlüssel zu auth-key-01 (DID-Relation "authentication").
+# assert-key-01 (assertionMethod) ist für Credentials, also für den Issuer.
 VERIFIER_DID=${ISSUER_DID}
-VERIFIER_DID_VERIFICATION_METHOD=${ISSUER_DID}#assert-key-01
+VERIFIER_DID_VERIFICATION_METHOD=${ISSUER_DID}#auth-key-01
 VERIFIER_SIGNING_KEY="-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY-----\n"
+
+# Docker-Image-Versionen – NIEMALS "stable" verwenden (siehe Fallstricke)
+ISSUER_IMAGE_TAG=2.1.1
+VERIFIER_IMAGE_TAG=4.1.2-unhardened
 
 # swiyu API (aus API Self-Service Portal)
 SWIYU_PARTNER_ID=<business_partner_uuid>
@@ -376,6 +381,41 @@ curl -s https://swiyu.ywesee.com/issuer/.well-known/openid-credential-issuer | p
 curl -s https://swiyu.ywesee.com/verifier/oid4vp/api/openid-client-metadata.json | python3 -m json.tool
 ```
 
+### Wallet-Fehler debuggen
+
+Die Wallet meldet jede abgelehnte Autorisierungsanfrage nur als `invalid_request` und kontaktiert den Server danach nicht mehr. Die Logs sind deshalb die einzige Erkenntnisquelle.
+
+```bash
+# Apache-Zugriffe der Wallet (User-Agent "swiyuWallet")
+sudo grep swiyuWallet /var/log/apache2/swiyu-access.log | tail
+
+# Falls die Datei leer ist – der HTTPS-vHost loggt evtl. in den Default:
+sudo grep swiyuWallet /var/log/apache2/other_vhosts_access.log | tail
+
+# Hat je eine Wallet etwas eingereicht?
+sudo docker exec swiyu-verifier-db psql -U verifier -d verifierdb \
+  -tAc "select state, count(*) from management group by 1;"
+```
+
+Das Muster im Access-Log ist entscheidend:
+
+| Beobachtung | Bedeutung |
+|---|---|
+| `GET …/request-object/<id>` **und** `POST …/response-data` | Wallet hat eingereicht → Grund steht im Verifier-Log (`error_code`) |
+| nur `GET`, kein `POST` | Wallet verwirft das Request-Object selbst → Fehler liegt in dessen Inhalt, nicht am Credential |
+| gar kein Eintrag | Wallet erreicht den Server nicht – oder du schaust ins falsche Logfile |
+
+Nur `PENDING`-Zeilen in der Datenbank heisst: Es gab noch nie eine erfolgreiche Verifikation.
+
+Signatur des Request-Objects gegen das DID-Dokument prüfen:
+
+```bash
+ID=$(curl -s https://ch.oddb.org/swiyu/login | jq -r .id)
+curl -s "https://swiyu.ywesee.com/verifier/oid4vp/api/request-object/$ID" \
+  | cut -d. -f1 | tr '_-' '/+' | base64 -d | jq .
+# erwartet: kid endet auf #auth-key-01, profile_version vorhanden
+```
+
 ---
 
 
@@ -465,26 +505,94 @@ curl -s -X POST \
 
 ## Bekannte Fallstricke
 
-### Issuer und Verifier müssen denselben Signing Key verwenden
+### Issuer und Verifier teilen den DID, aber nicht den Key
 
-Issuer und Verifier teilen sich denselben DID und dieselbe `assert-key-01` Verification Method. Deshalb **müssen beide denselben EC Private Key verwenden** – `VERIFIER_SIGNING_KEY` muss identisch mit `ISSUER_SIGNING_KEY` sein.
+Das DID-Dokument trennt die Verwendungszwecke:
 
-Wenn der Verifier einen anderen Key hat, schlägt die Signaturverifikation in der Wallet fehl:
-```
-SecKeyVerifySignature failed: EC signature verification failed, no match
-invalidSignature → "Ungültiger Nachweis"
-```
-
-**Lösung:** `VERIFIER_SIGNING_KEY` = `ISSUER_SIGNING_KEY` (beide `assert-key-01`).
-
-### Verification Method: assert-key-01 (nicht auth-key-01)
-
-Beide Services müssen `#assert-key-01` als Verification Method verwenden. `auth-key-01` führt zu Signaturfehlern.
+| Relation | Key | Wer signiert damit |
+|---|---|---|
+| `authentication` | `auth-key-01` | **Verifier** – Autorisierungsanfragen (JAR) |
+| `assertionMethod` | `assert-key-01` | **Issuer** und Statusliste – Credentials |
 
 ```
-VERIFIER_DID_VERIFICATION_METHOD=did:tdw:...#assert-key-01   ✅
-VERIFIER_DID_VERIFICATION_METHOD=did:tdw:...#auth-key-01     ❌
+VERIFIER_DID_VERIFICATION_METHOD=did:tdw:...#auth-key-01     ✅
+VERIFIER_DID_VERIFICATION_METHOD=did:tdw:...#assert-key-01   ❌
+ISSUER_DID_VERIFICATION_METHOD=did:tdw:...#assert-key-01     ✅
 ```
+
+Prüfen lässt sich die Zuordnung im DID-Log:
+
+```bash
+curl -s https://identifier-reg.trust-infra.swiyu-int.admin.ch/api/v1/did/<UUID>/did.jsonl \
+  | jq -r '..|objects|select(.publicKeyJwk)|.id'
+```
+
+### Das Image-Tag `stable` ist unbrauchbar
+
+Upstream pflegt `:stable` nicht. Im August 2026 zeigte es noch auf **2.1.2 vom Dezember 2025**, während 4.x aktuell war. Folge: Der Verifier sendet kein `profile_version` im JAR-Header (erst ab 2.3.0, Issue #694), und aktuelle Wallets lehnen jede Anfrage mit `invalid_request` ab.
+
+**Lösung:** Feste Versionen in `.env` pinnen und bewusst anheben.
+
+```bash
+# Verfügbare Versionen abfragen
+T=$(curl -s "https://ghcr.io/token?scope=repository:swiyu-admin-ch/swiyu-verifier:pull&service=ghcr.io" | jq -r .token)
+curl -s -H "Authorization: Bearer $T" \
+  "https://ghcr.io/v2/swiyu-admin-ch/swiyu-verifier/tags/list?n=500" \
+  | jq -r '.tags[]' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail
+```
+
+Ab 3.0.0 sind die Images gehärtet (kein Shell, `nonroot`). Wer das nicht migrieren will, nutzt die `-unhardened`-Variante.
+
+### Verifier ab 4.x akzeptiert nur noch DCQL
+
+`presentation_definition` wird abgewiesen:
+
+```json
+{"error_description":"dcqlQuery: must not be null"}
+```
+
+Stattdessen `dcql_query` senden (OID4VP 1.0):
+
+```json
+{
+  "dcql_query": {
+    "credentials": [{
+      "id": "doctor_credential",
+      "format": "vc+sd-jwt",
+      "meta": {"vct_values": ["doctor-credential-sdjwt"]},
+      "claims": [{"path": ["firstName"]}, {"path": ["lastName"]}, {"path": ["gln"]}]
+    }]
+  }
+}
+```
+
+Die `id` muss `^[a-zA-Z0-9_-]+$` erfüllen – Bindestriche in `doctor-credential` sind erlaubt, Punkte nicht.
+
+### DB-Passwörter dürfen bei `setup`-Läufen nicht neu erzeugt werden
+
+`POSTGRES_PASSWORD` wirkt nur bei der **Erstinitialisierung** des Volumes. Ein neu gewürfeltes Passwort lässt die Rolle in der Datenbank unverändert – beide Dienste landen in der Crash-Schleife:
+
+```
+FATAL: password authentication failed for user "verifier"
+```
+
+`setup` übernimmt deshalb zuerst den Wert aus dem laufenden Deployment. Falls es doch passiert, Passwort der Rolle nachziehen statt die DB zu löschen:
+
+```bash
+sudo docker exec swiyu-verifier-db sh -c \
+  'psql -U verifier -d verifierdb -c "ALTER USER verifier WITH PASSWORD '"'"'$POSTGRES_PASSWORD'"'"';"'
+```
+
+### Kein `EnvironmentFile=` in den systemd-Units
+
+systemd expandiert die `\n`-Escapes in den EC-Schlüsseln nicht, und seine Prozess-Umgebung hat Vorrang vor der `.env`, die `docker compose` korrekt parst. Ergebnis:
+
+```
+KeyStrategyException: Failed to parse EC Key from PEM.
+Caused by: JOSEException: No PEM-encoded keys found
+```
+
+Die Units übergeben stattdessen `--env-file` an `docker compose`.
 
 ### cryptographic_binding_methods_supported ist Pflicht für Key Binding
 
