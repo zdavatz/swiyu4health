@@ -518,6 +518,66 @@ curl -s -X POST \
 
 > **Voraussetzung:** `swiyucorebusiness_trust` im [API Self-Service Portal](https://selfservice.api.admin.ch) abonniert. Zugang beantragen bei: **swiyu@eid.admin.ch**
 
+## Migration auf did:webvh und Trust Protocol 2.0
+
+Mit Issuer/Verifier **5.x** entfallen Trust Protocol 1.0 und `vc+sd-jwt`. Sandbox und Produktion werden **Mitte November 2026** getrennt, Sandbox-Credentials werden dann aus der produktiven Wallet gelöscht ([Ankündigung](https://github.com/swiyu-admin-ch/community/discussions/11)).
+
+### Stand (14.10.2026)
+
+Neue DID publiziert und im Vertrauensregister eingetragen:
+
+```
+did:webvh:QmczHUBCTQHXmakx8KsnMzZRHPrUGJiS5cy6CGgzgNyy3t:identifier-reg.trust-infra.swiyu-int.admin.ch:api:v1:did:f2f700f5-39a2-4a82-b895-dfa3d4b8ca94
+```
+
+Sie verwendet die **bestehenden Schlüssel** – die `*_SIGNING_KEY`-Werte in der `.env` bleiben gleich. Issuer und Verifier laufen bewusst noch auf der alten `did:tdw`, damit alle Nutzer ihren Arztausweis nur einmal neu laden müssen.
+
+### Ablauf, wie er durchgeführt wurde
+
+```bash
+TB=~/Downloads/swiyu/didtoolbox-2.3.0.jar
+K=~/Downloads/swiyu/didtoolbox-java-1.3.1/.didtoolbox    # bestehende Schlüssel
+API=https://identifier-reg-api.trust-infra.swiyu-int.admin.ch/api/v1/identifier/business-entities/$PARTNER_ID
+TRUST=https://trust-reg-api.trust-infra.swiyu-int.admin.ch/api/v1/trust
+
+# 1. Freien DID-Space suchen (status NOT_INITIALIZED)
+curl -H "Authorization: Bearer $AT" "$API/identifier"
+
+# 2. did:webvh mit den vorhandenen Schlüsseln erzeugen
+java -jar $TB create -m did:webvh:1.0 \
+  -u https://identifier-reg.trust-infra.swiyu-int.admin.ch/api/v1/did/<SPACE-ID> \
+  -s $K/id_ed25519 -v $K/id_ed25519.pub \
+  -a "assert-key-01,$K/assert-key-01.pub" \
+  -t "auth-key-01,$K/auth-key-01.pub" > didlog.jsonl
+
+# 3. Publizieren
+curl -X PUT -H "Authorization: Bearer $AT" -H 'Content-Type: application/jsonl+json' \
+  --data-binary @didlog.jsonl "$API/identifier-entries/<SPACE-ID>"
+
+# 4. Im Service Portal: Profil → DID auswählen → Willensäusserung (QES-signiert) hochladen
+
+# 5. Proof of Possession
+curl -H "Authorization: Bearer $AT" "$TRUST/trust-onboarding-submission/proof-of-possessions"   # liefert nonce
+java -jar $TB create-pop -d didlog.jsonl -k "<DID>#assert-key-01" -n <NONCE> -s $K/assert-key-01 > pop.jwt
+curl -X POST -H "Authorization: Bearer $AT" -H 'Content-Type: application/json' \
+  -d "{\"proofOfPossessions\": [\"$(cat pop.jwt)\"]}" \
+  "$TRUST/trust-onboarding-submission/proof-of-possessions"
+
+# 6. Im Portal „Antrag verbindlich einreichen" → automatische Prüfung → eingetragen
+```
+
+`$AT` ist das Token aus dem API Self-Service Portal (**„Token aktualisieren"** liefert ein Access Token, 25 h gültig – kein Refresh Token).
+
+### Noch offen (sobald 5.x-Images verfügbar sind, spätestens Anfang November)
+
+1. `.env`: die fünf DID-Strings auf die neue `did:webvh` umstellen
+2. Issuer: `dc+sd-jwt`, DPoP wieder aktivieren
+3. Verifier: Trust-Protocol-2.0-Variablen (`SWIYU_TMS_*`, `SWIYU_TRUST_ISSUER_DID`)
+4. `ch.oddb.org`: `accepted_issuer_did` und `CREDENTIAL_FORMAT`
+5. Alle Arztausweise neu ausstellen
+
+---
+
 ## Bekannte Fallstricke
 
 ### Issuer und Verifier teilen den DID, aber nicht den Key

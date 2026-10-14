@@ -96,6 +96,29 @@ With DCQL the verifier groups the presented claims by query id and wraps them in
 
 The old `presentation_definition` flow returned the claims flat. Consumers must handle the nesting — `ch.oddb.org` does so in `SwiyuMiddleware#extract_claims`.
 
+## Migration to 5.x / Trust Protocol 2.0 (deadline mid-November 2026)
+
+Announced 13.10.2026 in https://github.com/swiyu-admin-ch/community/discussions/11: Issuer/Verifier 5.x drop Trust Protocol 1.0 and `vc+sd-jwt`; Sandbox and Production are separated mid-November and Sandbox credentials are deleted from the production wallet.
+
+**Done (14.10.2026):** new DID published and registered in the trust registry via Trust Protocol 2.0 (Proof of Possession + QES-signed declaration of intent):
+
+```
+did:webvh:QmczHUBCTQHXmakx8KsnMzZRHPrUGJiS5cy6CGgzgNyy3t:identifier-reg.trust-infra.swiyu-int.admin.ch:api:v1:did:f2f700f5-39a2-4a82-b895-dfa3d4b8ca94
+```
+
+It reuses the **existing** keys (`id_ed25519` as update key, `assert-key-01`, `auth-key-01`) — do not generate new ones. The `*_SIGNING_KEY` values in `.env` therefore stay unchanged.
+
+**Deliberately not switched yet:** Issuer and Verifier still run on `did:tdw:…5b1672d3`, so users only have to re-import their credential once.
+
+**Remaining, once 5.x images are on ghcr.io (latest: start of November):**
+1. `.env`: replace the five DID strings (`ISSUER_DID`, `VERIFIER_DID`, three `*_VERIFICATION_METHOD`) — keys stay
+2. Issuer: `dc+sd-jwt`, `credential_metadata.claims`, `APPLICATION_DPOP_ENFORCE=true` (verify the handshake with the current wallet first)
+3. Verifier: TP 2.0 variables `SWIYU_TMS_AUTHORING_URL`, `SWIYU_TMS_OAUTH_*`, `SWIYU_TMS_BOOTSTRAP_REFRESH_TOKEN`, `SWIYU_TRUST_ISSUER_DID`
+4. `ch.oddb.org`: `accepted_issuer_did` in `etc/swiyu_roles.yml`, `CREDENTIAL_FORMAT` → `dc+sd-jwt`
+5. Re-issue all doctor credentials
+
+**Registry API notes:** DID spaces are listed at `GET …/identifier/business-entities/<partner>/identifier` (not `identifier-entries`). PoP is submitted as `{"proofOfPossessions": ["<jwt>"]}`. The API Self-Service Portal button "Token aktualisieren" yields an **access token** (`typ: Bearer`, 25 h), not a refresh token.
+
 ## Editing the Setup Script
 
 The `setup` script generates: Docker Compose files, environment files, metadata JSON configs, Apache vhost, and systemd units. When modifying it, be aware that:
