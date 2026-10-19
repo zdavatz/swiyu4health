@@ -114,6 +114,7 @@ It reuses the **existing** keys (`id_ed25519` as update key, `assert-key-01`, `a
 1. `APPLICATION_DPOP_ENFORCE=true` — verify the handshake with the current wallet first
 2. Re-issue all remaining doctor credentials (old `vc+sd-jwt` on `did:tdw` are rejected)
 3. Production onboarding via info@swiyu.admin.ch (swiyu@eid.admin.ch bounces — no MX) before the Sandbox/Production split
+4. Wallet warning "This request is not registered in the Confederation's system" (credential badges "Demo"/"Unbekannt") on every presentation; login still works. Presumably a missing vqPS: verifier needs `SWIYU_TMS_*` (incl. a bootstrap refresh token — source unknown, portal gives only access tokens) and `ch.oddb.org` must send `verification_purpose`. Asked 19.10.2026 in discussioncomment-19038532 and at info@swiyu.admin.ch — wait for the answer before configuring
 
 **Registry API notes:** DID spaces are listed at `GET …/identifier/business-entities/<partner>/identifier` (not `identifier-entries`). PoP is submitted as `{"proofOfPossessions": ["<jwt>"]}`. The API Self-Service Portal button "Token aktualisieren" yields an **access token** (`typ: Bearer`, 25 h), not a refresh token.
 
