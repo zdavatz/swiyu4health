@@ -536,6 +536,20 @@ Sie verwendet die **bestehenden Schlüssel** – die `*_SIGNING_KEY`-Werte in de
 
 Noch offen: `APPLICATION_DPOP_ENFORCE=true` mit der aktuellen Wallet testen.
 
+### Offen: Wallet-Warnung „request not registered"
+
+Seit 5.0.1 zeigt die Wallet bei jeder Präsentationsanfrage:
+
+> This request is not registered in the Confederation's system. Accepting may pose a risk to your data.
+
+![Wallet-Warnung](docs/wallet-warning-request-not-registered.png)
+
+Der Verifier selbst gilt als vertrauenswürdig (grünes Häkchen), der Nachweis trägt „Demo" und „Unbekannt". Der Login funktioniert trotzdem.
+
+Vermutete Ursache: Es fehlt ein **Verification Query Public Statement (vqPS)**. Der Verifier 5.x kann es selbst registrieren, wenn `SWIYU_TMS_AUTHORING_URL`, `SWIYU_TMS_OAUTH_TOKEN_URL`, `SWIYU_TMS_OAUTH_CLIENT_ID/SECRET` und `SWIYU_TMS_BOOTSTRAP_REFRESH_TOKEN` gesetzt sind und der Consumer im Management-Request ein `verification_purpose` (`scope`, `purpose_name`, `purpose_description`) mitschickt. Laut Verifier-README ist das „currently intended for testing purposes only".
+
+Ungeklärt ist, woher der Refresh Token kommt: Das Portal liefert nur ein Access Token. Nachgefragt am 19.10.2026 auf [GitHub](https://github.com/swiyu-admin-ch/community/discussions/11#discussioncomment-19038532) und bei info@swiyu.admin.ch.
+
 ### Ablauf, wie er durchgeführt wurde
 
 ```bash
