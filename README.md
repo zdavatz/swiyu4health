@@ -516,7 +516,7 @@ curl -s -X POST \
   | python3 -m json.tool
 ```
 
-> **Voraussetzung:** `swiyucorebusiness_trust` im [API Self-Service Portal](https://selfservice.api.admin.ch) abonniert. Zugang beantragen bei: **swiyu@eid.admin.ch**
+> **Voraussetzung:** `swiyucorebusiness_trust` im [API Self-Service Portal](https://selfservice.api.admin.ch) abonniert. Zugang beantragen bei: **info@swiyu.admin.ch** (`swiyu@eid.admin.ch` ist nicht zustellbar – `eid.admin.ch` hat keinen MX)
 
 ## Migration auf did:webvh und Trust Protocol 2.0
 

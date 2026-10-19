@@ -113,7 +113,7 @@ It reuses the **existing** keys (`id_ed25519` as update key, `assert-key-01`, `a
 **Remaining:**
 1. `APPLICATION_DPOP_ENFORCE=true` — verify the handshake with the current wallet first
 2. Re-issue all remaining doctor credentials (old `vc+sd-jwt` on `did:tdw` are rejected)
-3. Production onboarding via swiyu@eid.admin.ch before the Sandbox/Production split
+3. Production onboarding via info@swiyu.admin.ch (swiyu@eid.admin.ch bounces — no MX) before the Sandbox/Production split
 
 **Registry API notes:** DID spaces are listed at `GET …/identifier/business-entities/<partner>/identifier` (not `identifier-entries`). PoP is submitted as `{"proofOfPossessions": ["<jwt>"]}`. The API Self-Service Portal button "Token aktualisieren" yields an **access token** (`typ: Bearer`, 25 h), not a refresh token.
 
