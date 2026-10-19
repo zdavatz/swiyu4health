@@ -67,7 +67,7 @@ curl -s "https://identifier-reg.trust-infra.swiyu-int.admin.ch/api/v1/did/${IDEN
 
 Der vollständige DID hat die Form:
 ```
-did:tdw:<SCID>:identifier-reg.trust-infra.swiyu-int.admin.ch:api:v1:did:<IDENTIFIER_UUID>
+did:webvh:<SCID>:identifier-reg.trust-infra.swiyu-int.admin.ch:api:v1:did:<IDENTIFIER_UUID>
 ```
 
 ---
@@ -81,7 +81,7 @@ Erstelle `~/software/swiyu4health/.env` mit folgenden Werten:
 EXTERNAL_DOMAIN=swiyu.ywesee.com
 
 # Issuer DID (aus didtoolbox output)
-ISSUER_DID=did:tdw:<SCID>:identifier-reg.trust-infra.swiyu-int.admin.ch:api:v1:did:<UUID>
+ISSUER_DID=did:webvh:<SCID>:identifier-reg.trust-infra.swiyu-int.admin.ch:api:v1:did:<UUID>
 ISSUER_DID_VERIFICATION_METHOD=${ISSUER_DID}#assert-key-01
 ISSUER_SIGNING_KEY="-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY-----\n"
 
@@ -98,8 +98,8 @@ VERIFIER_DID_VERIFICATION_METHOD=${ISSUER_DID}#auth-key-01
 VERIFIER_SIGNING_KEY="-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY-----\n"
 
 # Docker-Image-Versionen – NIEMALS "stable" verwenden (siehe Fallstricke)
-ISSUER_IMAGE_TAG=4.1.0-unhardened
-VERIFIER_IMAGE_TAG=4.1.2-unhardened
+ISSUER_IMAGE_TAG=5.0.1-unhardened
+VERIFIER_IMAGE_TAG=5.0.1-unhardened
 
 # Ab Issuer 3.2.0 sind DPoP und Verschlüsselung der Credential-Anfrage Pflicht.
 # Die swiyu Wallet 1.17 kommt damit derzeit nicht durch – siehe Fallstricke.
@@ -154,7 +154,7 @@ Ab swiyu-issuer v2.1.1 sind **zwei** Konfigurationsdateien erforderlich:
   "display": [{ "name": "ywesee GmbH", "locale": "de-CH" }],
   "credential_configurations_supported": {
     "doctor-credential": {
-      "format": "vc+sd-jwt",
+      "format": "dc+sd-jwt",
       "cryptographic_binding_methods_supported": ["jwk"],
       "proof_types_supported": {
         "jwt": { "proof_signing_alg_values_supported": ["ES256"] }
@@ -522,15 +522,19 @@ curl -s -X POST \
 
 Mit Issuer/Verifier **5.x** entfallen Trust Protocol 1.0 und `vc+sd-jwt`. Sandbox und Produktion werden **Mitte November 2026** getrennt, Sandbox-Credentials werden dann aus der produktiven Wallet gelöscht ([Ankündigung](https://github.com/swiyu-admin-ch/community/discussions/11)).
 
-### Stand (14.10.2026)
+### Stand (19.10.2026): umgestellt
 
-Neue DID publiziert und im Vertrauensregister eingetragen:
+Issuer und Verifier laufen auf **5.0.1-unhardened** mit der neuen DID, Format `dc+sd-jwt`. Login über ch.oddb.org mit neu ausgestelltem Nachweis bestätigt. Alle Arztausweise müssen neu ausgestellt werden – alte `vc+sd-jwt`-Nachweise auf `did:tdw` werden nicht mehr akzeptiert.
+
+Die DID wurde am 14.10.2026 publiziert und im Vertrauensregister eingetragen:
 
 ```
 did:webvh:QmczHUBCTQHXmakx8KsnMzZRHPrUGJiS5cy6CGgzgNyy3t:identifier-reg.trust-infra.swiyu-int.admin.ch:api:v1:did:f2f700f5-39a2-4a82-b895-dfa3d4b8ca94
 ```
 
-Sie verwendet die **bestehenden Schlüssel** – die `*_SIGNING_KEY`-Werte in der `.env` bleiben gleich. Issuer und Verifier laufen bewusst noch auf der alten `did:tdw`, damit alle Nutzer ihren Arztausweis nur einmal neu laden müssen.
+Sie verwendet die **bestehenden Schlüssel** – die `*_SIGNING_KEY`-Werte in der `.env` blieben gleich, nur die fünf DID-Strings wurden ersetzt (Verifier: `#auth-key-01`, Issuer/Status-List: `#assert-key-01`).
+
+Noch offen: `APPLICATION_DPOP_ENFORCE=true` mit der aktuellen Wallet testen.
 
 ### Ablauf, wie er durchgeführt wurde
 
@@ -590,9 +594,9 @@ Das DID-Dokument trennt die Verwendungszwecke:
 | `assertionMethod` | `assert-key-01` | **Issuer** und Statusliste – Credentials |
 
 ```
-VERIFIER_DID_VERIFICATION_METHOD=did:tdw:...#auth-key-01     ✅
-VERIFIER_DID_VERIFICATION_METHOD=did:tdw:...#assert-key-01   ❌
-ISSUER_DID_VERIFICATION_METHOD=did:tdw:...#assert-key-01     ✅
+VERIFIER_DID_VERIFICATION_METHOD=did:webvh:...#auth-key-01     ✅
+VERIFIER_DID_VERIFICATION_METHOD=did:webvh:...#assert-key-01   ❌
+ISSUER_DID_VERIFICATION_METHOD=did:webvh:...#assert-key-01     ✅
 ```
 
 Prüfen lässt sich die Zuordnung im DID-Log:
@@ -666,7 +670,7 @@ Stattdessen `dcql_query` senden (OID4VP 1.0):
   "dcql_query": {
     "credentials": [{
       "id": "doctor_credential",
-      "format": "vc+sd-jwt",
+      "format": "dc+sd-jwt",
       "meta": {"vct_values": ["doctor-credential-sdjwt"]},
       "claims": [{"path": ["firstName"]}, {"path": ["lastName"]}, {"path": ["gln"]}]
     }]
@@ -836,7 +840,7 @@ https://keymanager-prd.api.admin.ch/keycloak/realms/APIGW/protocol/openid-connec
 
 Der DID muss **ohne** `__underscores__` sein. Das Format mit `__identifier-reg...__` entsteht bei lokalem Testing ohne echte Registry-URL. Korrekt:
 ```
-did:tdw:<SCID>:identifier-reg.trust-infra.swiyu-int.admin.ch:api:v1:did:<UUID>
+did:webvh:<SCID>:identifier-reg.trust-infra.swiyu-int.admin.ch:api:v1:did:<UUID>
 ```
 
 ### vp_formats im Verifier
@@ -844,6 +848,7 @@ did:tdw:<SCID>:identifier-reg.trust-infra.swiyu-int.admin.ch:api:v1:did:<UUID>
 Die `verifier_metadata.json` muss `vp_formats` mit `jwt_vp` enthalten (Java-Pflichtfeld):
 ```json
 "vp_formats": {
+  "dc+sd-jwt": { "sd-jwt_alg_values": ["ES256"], "kb-jwt_alg_values": ["ES256"] },
   "vc+sd-jwt": { "sd-jwt_alg_values": ["ES256"], "kb-jwt_alg_values": ["ES256"] },
   "jwt_vp": { "alg_values": ["ES256"], "alg": ["ES256"] }
 }

@@ -23,8 +23,8 @@ Apache Reverse Proxy (TLS, swiyu.ywesee.com)
     └─ /verifier-mgmt/ → port 8083/management (IP-whitelist: 65.109.136.203, 65.109.163.188, 192.168.0.1 — or X-API-Key)
 ```
 
-- **Issuer (OID4VCI):** Issues SD-JWT verifiable credentials via `ghcr.io/swiyu-admin-ch/swiyu-issuer:4.1.0-unhardened`
-- **Verifier (OID4VP):** Verifies credentials via `ghcr.io/swiyu-admin-ch/swiyu-verifier:4.1.2-unhardened`
+- **Issuer (OID4VCI):** Issues SD-JWT verifiable credentials via `ghcr.io/swiyu-admin-ch/swiyu-issuer:5.0.1-unhardened`
+- **Verifier (OID4VP):** Verifies credentials via `ghcr.io/swiyu-admin-ch/swiyu-verifier:5.0.1-unhardened`
 - Both share the **same DID**, but **different keys**: the issuer signs credentials with `assert-key-01` (`assertionMethod`), the verifier signs authorization requests with `auth-key-01` (`authentication`)
 - Deployed to `/opt/swiyu/{issuer,verifier}/` with systemd units
 - Consumer: `ch.oddb.org` (65.109.163.188) creates verifications via `/verifier-mgmt/` — see `src/util/swiyu_client.rb` there
@@ -64,7 +64,7 @@ There are no tests, linters, or CI/CD pipelines.
 
 1. **Separate signing keys per DID relation:** the DID document maps `authentication → auth-key-01` and `assertionMethod → assert-key-01`. The verifier signs *authorization requests*, so `VERIFIER_SIGNING_KEY` must be the **`auth-key-01`** key; the issuer and status list sign *credentials*, so they use `assert-key-01`. Using `assert-key-01` for the verifier makes wallets reject the request
 2. **Never use the `:stable` image tag:** upstream does not maintain it — in August 2026 it still pointed at 2.1.2 (December 2025) while 4.x was current. Pin explicit versions in `.env` (`ISSUER_IMAGE_TAG`, `VERIFIER_IMAGE_TAG`)
-3. **Verifier 4.x speaks DCQL only:** `presentation_definition` is rejected with `dcqlQuery: must not be null`. Consumers must send `dcql_query` (see `ch.oddb.org` `src/util/swiyu_client.rb`)
+3. **Verifier 4.x+ speaks DCQL only:** `presentation_definition` is rejected with `dcqlQuery: must not be null`. Consumers must send `dcql_query` (see `ch.oddb.org` `src/util/swiyu_client.rb`)
 4. **One-time refresh token:** `SWIYU_STATUS_REGISTRY_BOOTSTRAP_REFRESH_TOKEN` is consumed on first use and rotated into PostgreSQL. DB wipe = must regenerate token via API Self-Service Portal
 5. **EC keys in .env:** Must be single-line with `\n` escapes, **in double quotes**. `setup` writes them unquoted into `/opt/swiyu/*/.env` because it loads `.env` via `export "$line"` without quote removal — the quotes are already part of the value. Do not add another pair
 6. **No `EnvironmentFile=` in the systemd units:** systemd does not expand the `\n` escapes and its process environment wins over the `.env` that `docker compose` parses correctly. Result would be `No PEM-encoded keys found`. The units pass `--env-file` to compose instead
@@ -108,14 +108,12 @@ did:webvh:QmczHUBCTQHXmakx8KsnMzZRHPrUGJiS5cy6CGgzgNyy3t:identifier-reg.trust-in
 
 It reuses the **existing** keys (`id_ed25519` as update key, `assert-key-01`, `auth-key-01`) — do not generate new ones. The `*_SIGNING_KEY` values in `.env` therefore stay unchanged.
 
-**Deliberately not switched yet:** Issuer and Verifier still run on `did:tdw:…5b1672d3`, so users only have to re-import their credential once.
+**Done (19.10.2026):** Issuer and Verifier run on `5.0.1-unhardened` with the new DID; issuer metadata uses `dc+sd-jwt` and `credential_metadata.claims`; `ch.oddb.org` sends `dc+sd-jwt` and the new `accepted_issuer_did`. Login with a re-issued credential confirmed. The verifier header `SWIYU-API-Version: 1` still works with 5.0.1.
 
-**Remaining, once 5.x images are on ghcr.io (latest: start of November):**
-1. `.env`: replace the five DID strings (`ISSUER_DID`, `VERIFIER_DID`, three `*_VERIFICATION_METHOD`) — keys stay
-2. Issuer: `dc+sd-jwt`, `credential_metadata.claims`, `APPLICATION_DPOP_ENFORCE=true` (verify the handshake with the current wallet first)
-3. Verifier: TP 2.0 variables `SWIYU_TMS_AUTHORING_URL`, `SWIYU_TMS_OAUTH_*`, `SWIYU_TMS_BOOTSTRAP_REFRESH_TOKEN`, `SWIYU_TRUST_ISSUER_DID`
-4. `ch.oddb.org`: `accepted_issuer_did` in `etc/swiyu_roles.yml`, `CREDENTIAL_FORMAT` → `dc+sd-jwt`
-5. Re-issue all doctor credentials
+**Remaining:**
+1. `APPLICATION_DPOP_ENFORCE=true` — verify the handshake with the current wallet first
+2. Re-issue all remaining doctor credentials (old `vc+sd-jwt` on `did:tdw` are rejected)
+3. Production onboarding via swiyu@eid.admin.ch before the Sandbox/Production split
 
 **Registry API notes:** DID spaces are listed at `GET …/identifier/business-entities/<partner>/identifier` (not `identifier-entries`). PoP is submitted as `{"proofOfPossessions": ["<jwt>"]}`. The API Self-Service Portal button "Token aktualisieren" yields an **access token** (`typ: Bearer`, 25 h), not a refresh token.
 
@@ -129,8 +127,8 @@ The `setup` script generates: Docker Compose files, environment files, metadata 
 
 ## Standards & Protocols
 
-- **DID method:** `did:tdw` (TrustWeb DID) via didtoolbox-java
-- **Credential format:** SD-JWT with ES256 (ECDSA P-256)
+- **DID method:** `did:webvh` via didtoolbox-java 2.3.0 (previously `did:tdw`)
+- **Credential format:** `dc+sd-jwt` (SD-JWT VC) with ES256 (ECDSA P-256)
 - **Issuance:** OID4VCI (OpenID for Verifiable Credentials Issuance)
 - **Verification:** OID4VP (OpenID for Verifiable Presentations)
 - **Auth:** OAuth 2.0 via Keycloak (keymanager-prd.api.admin.ch)

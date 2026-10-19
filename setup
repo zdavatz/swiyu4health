@@ -111,8 +111,8 @@ VERIFIER_DB_PASSWORD="${VERIFIER_DB_PASSWORD:-$(openssl rand -hex 24)}"
 # 2.1.2 sendet kein profile_version im JAR-Header (ab 2.3.0, Issue #694);
 # aktuelle Wallets lehnen solche Autorisierungsanfragen mit invalid_request ab.
 # Deshalb feste Versionen pinnen und bewusst anheben.
-ISSUER_IMAGE_TAG="${ISSUER_IMAGE_TAG:-2.1.1}"
-VERIFIER_IMAGE_TAG="${VERIFIER_IMAGE_TAG:-2.3.3}"
+ISSUER_IMAGE_TAG="${ISSUER_IMAGE_TAG:-5.0.1-unhardened}"
+VERIFIER_IMAGE_TAG="${VERIFIER_IMAGE_TAG:-5.0.1-unhardened}"
 
 # ── Credential-Typ ─────────────────────────────────────────────────────────
 CREDENTIAL_TYPE="${CREDENTIAL_TYPE:-doctor-credential}"
@@ -248,11 +248,13 @@ EOF
 
 write_issuer_metadata() {
     info "Schreibe Issuer-Metadaten..."
-    # WICHTIG:
-    #   - version "1.0" ist Pflicht
+    # WICHTIG (Issuer 5.x, Swiss Profile):
+    #   - format nur noch "dc+sd-jwt" – vc+sd-jwt wurde in 5.0 entfernt
+    #   - Claims unter credential_metadata.claims als Array mit "path"
+    #     (das alte "claims"-Objekt in credential_configurations_supported
+    #     ist seit 4.0 entfernt)
     #   - display (Top-Level) ist Pflicht – iOS Wallet bricht sonst still ab!
-    #   - Schlüssel heisst credential_configurations_supported (nicht credentials_supported)
-    #   - claims mit sd: "always" für Selective Disclosure
+    #   - "version" wird vom Issuer ignoriert, er setzt profile_version selbst
     cat > "${SETUP_DIR}/issuer/config/issuer_metadata.json" <<EOF
 {
   "version": "1.0",
@@ -267,7 +269,7 @@ write_issuer_metadata() {
   ],
   "credential_configurations_supported": {
     "${CREDENTIAL_TYPE}": {
-      "format": "vc+sd-jwt",
+      "format": "dc+sd-jwt",
       "vct": "${CREDENTIAL_VCT}",
       "credential_signing_alg_values_supported": ["ES256"],
       "cryptographic_binding_methods_supported": ["jwk"],
@@ -276,60 +278,61 @@ write_issuer_metadata() {
           "proof_signing_alg_values_supported": ["ES256"]
         }
       },
-      "claims": {
-        "firstName": {
-          "display": [
-            {"name": "Vorname", "locale": "de-CH"},
-            {"name": "Prénom", "locale": "fr-CH"},
-            {"name": "Nome", "locale": "it-CH"},
-            {"name": "First name", "locale": "en"}
-          ],
-          "sd": "always"
-        },
-        "lastName": {
-          "display": [
-            {"name": "Nachname", "locale": "de-CH"},
-            {"name": "Nom de famille", "locale": "fr-CH"},
-            {"name": "Cognome", "locale": "it-CH"},
-            {"name": "Last name", "locale": "en"}
-          ],
-          "sd": "always"
-        },
-        "gln": {
-          "display": [
-            {"name": "GLN", "locale": "de-CH"},
-            {"name": "GLN", "locale": "fr-CH"},
-            {"name": "GLN", "locale": "it-CH"},
-            {"name": "GLN", "locale": "en"}
-          ],
-          "sd": "always"
-        }
-      },
-      "order": ["firstName", "lastName", "gln"],
-      "display": [
-        {
-          "name": "${CREDENTIAL_NAME_DE}",
-          "locale": "de-CH",
-          "background_color": "#003d73",
-          "text_color": "#ffffff",
-          "logo": {
-            "uri": "https://${EXTERNAL_DOMAIN}/logo.png",
-            "alt_text": "${CREDENTIAL_NAME_EN} Logo"
+      "credential_metadata": {
+        "display": [
+          {
+            "name": "${CREDENTIAL_NAME_DE}",
+            "locale": "de-CH",
+            "background_color": "#003d73",
+            "logo": {
+              "uri": "https://${EXTERNAL_DOMAIN}/logo.png",
+              "alt_text": "${CREDENTIAL_NAME_EN} Logo"
+            }
+          },
+          {
+            "name": "${CREDENTIAL_NAME_FR}",
+            "locale": "fr-CH",
+            "background_color": "#003d73"
+          },
+          {
+            "name": "${CREDENTIAL_NAME_EN}",
+            "locale": "en",
+            "background_color": "#003d73"
           }
-        },
-        {
-          "name": "${CREDENTIAL_NAME_FR}",
-          "locale": "fr-CH",
-          "background_color": "#003d73",
-          "text_color": "#ffffff"
-        },
-        {
-          "name": "${CREDENTIAL_NAME_EN}",
-          "locale": "en",
-          "background_color": "#003d73",
-          "text_color": "#ffffff"
-        }
-      ]
+        ],
+        "claims": [
+          {
+            "path": ["firstName"],
+            "mandatory": true,
+            "display": [
+              {"name": "Vorname", "locale": "de-CH"},
+              {"name": "Prénom", "locale": "fr-CH"},
+              {"name": "Nome", "locale": "it-CH"},
+              {"name": "First name", "locale": "en"}
+            ]
+          },
+          {
+            "path": ["lastName"],
+            "mandatory": true,
+            "display": [
+              {"name": "Nachname", "locale": "de-CH"},
+              {"name": "Nom de famille", "locale": "fr-CH"},
+              {"name": "Cognome", "locale": "it-CH"},
+              {"name": "Last name", "locale": "en"}
+            ]
+          },
+          {
+            "path": ["gln"],
+            "mandatory": true,
+            "display": [
+              {"name": "GLN", "locale": "de-CH"},
+              {"name": "GLN", "locale": "fr-CH"},
+              {"name": "GLN", "locale": "it-CH"},
+              {"name": "GLN", "locale": "en"}
+            ]
+          }
+        ]
+      }
     }
   }
 }
@@ -357,6 +360,10 @@ write_verifier_metadata() {
   "logo_uri": "https://${EXTERNAL_DOMAIN}/logo.png",
   "contacts": ["admin@${EXTERNAL_DOMAIN}"],
   "vp_formats": {
+    "dc+sd-jwt": {
+      "sd-jwt_alg_values": ["ES256"],
+      "kb-jwt_alg_values": ["ES256"]
+    },
     "vc+sd-jwt": {
       "sd-jwt_alg_values": ["ES256"],
       "kb-jwt_alg_values": ["ES256"]
@@ -399,7 +406,7 @@ services:
       - issuer-internal
 
   swiyu-issuer-service:
-    image: ghcr.io/swiyu-admin-ch/swiyu-issuer:\${ISSUER_IMAGE_TAG:-2.1.1}
+    image: ghcr.io/swiyu-admin-ch/swiyu-issuer:\${ISSUER_IMAGE_TAG:-5.0.1-unhardened}
     container_name: swiyu-issuer-service
     restart: unless-stopped
     depends_on:
@@ -486,7 +493,7 @@ services:
       - verifier-internal
 
   swiyu-verifier:
-    image: ghcr.io/swiyu-admin-ch/swiyu-verifier:\${VERIFIER_IMAGE_TAG:-2.3.3}
+    image: ghcr.io/swiyu-admin-ch/swiyu-verifier:\${VERIFIER_IMAGE_TAG:-5.0.1-unhardened}
     container_name: swiyu-verifier
     restart: unless-stopped
     depends_on:
