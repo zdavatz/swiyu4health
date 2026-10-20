@@ -536,65 +536,22 @@ Sie verwendet die **bestehenden Schlüssel** – die `*_SIGNING_KEY`-Werte in de
 
 Noch offen: `APPLICATION_DPOP_ENFORCE=true` mit der aktuellen Wallet testen.
 
-### Offen: Wallet-Warnung „request not registered"
+### Gelöst: Wallet-Warnung „request not registered" (vqPS)
 
-Seit 5.0.1 zeigt die Wallet bei jeder Präsentationsanfrage:
+Ohne **Verification Query Public Statement (vqPS)** zeigt die Wallet ab 5.x bei jeder Präsentationsanfrage:
 
 > This request is not registered in the Confederation's system. Accepting may pose a risk to your data.
 
 ![Wallet-Warnung](docs/wallet-warning-request-not-registered.png)
 
-Der Verifier selbst gilt als vertrauenswürdig (grünes Häkchen), der Nachweis trägt „Demo" und „Unbekannt". Der Login funktioniert trotzdem.
+Lösung (20.10.2026, Hinweis von [tschortsch](https://github.com/swiyu-admin-ch/community/discussions/11#discussioncomment-19045768)):
 
-Vermutete Ursache: Es fehlt ein **Verification Query Public Statement (vqPS)**. Der Verifier 5.x kann es selbst registrieren, wenn `SWIYU_TMS_AUTHORING_URL`, `SWIYU_TMS_OAUTH_TOKEN_URL`, `SWIYU_TMS_OAUTH_CLIENT_ID/SECRET` und `SWIYU_TMS_BOOTSTRAP_REFRESH_TOKEN` gesetzt sind und der Consumer im Management-Request ein `verification_purpose` (`scope`, `purpose_name`, `purpose_description`) mitschickt. Laut Verifier-README ist das „currently intended for testing purposes only".
+1. **Verifier:** `SWIYU_TMS_BOOTSTRAP_REFRESH_TOKEN` in die `.env` eintragen. `setup` setzt dann die übrigen `SWIYU_TMS_*`-Variablen mit Defaults (`https://trust-reg-api.trust-infra.swiyu-int.admin.ch`, Keycloak-Token-URL, Customer Key/Secret der Status Registry).
+2. **Consumer:** im Management-Request ein `verification_purpose` mitschicken (`scope`, `purpose_name`, `purpose_description`), siehe `ch.oddb.org` `src/util/swiyu_client.rb`. Der Verifier registriert das vqPS beim ersten Request selbst (`vqPS registered/cached for scope=…`).
 
-Ungeklärt ist, woher der Refresh Token kommt: Das Portal liefert nur ein Access Token. Nachgefragt am 19.10.2026 auf [GitHub](https://github.com/swiyu-admin-ch/community/discussions/11#discussioncomment-19038532) und bei info@swiyu.admin.ch.
+**Refresh Token:** API Self-Service Portal (https://selfservice.api.admin.ch/api-selfservice/, die Root-URL liefert 503) → Anwendungen → „Token aktualisieren" → im Dialog **nach unten scrollen**. Der Refresh Token hat `typ: Offline` und beginnt mit `eyJhbGciOiJIUzUxMi…`. Das obere Token (`typ: Bearer`, RS256, 25 h) ist das Access Token. Unbenutzt ist der Refresh Token 7 Tage gültig. Er wird beim ersten Gebrauch rotiert und in der Verifier-DB gespeichert, deshalb gilt auch hier: kein `down -v`.
 
-### Ablauf, wie er durchgeführt wurde
-
-```bash
-TB=~/Downloads/swiyu/didtoolbox-2.3.0.jar
-K=~/Downloads/swiyu/didtoolbox-java-1.3.1/.didtoolbox    # bestehende Schlüssel
-API=https://identifier-reg-api.trust-infra.swiyu-int.admin.ch/api/v1/identifier/business-entities/$PARTNER_ID
-TRUST=https://trust-reg-api.trust-infra.swiyu-int.admin.ch/api/v1/trust
-
-# 1. Freien DID-Space suchen (status NOT_INITIALIZED)
-curl -H "Authorization: Bearer $AT" "$API/identifier"
-
-# 2. did:webvh mit den vorhandenen Schlüsseln erzeugen
-java -jar $TB create -m did:webvh:1.0 \
-  -u https://identifier-reg.trust-infra.swiyu-int.admin.ch/api/v1/did/<SPACE-ID> \
-  -s $K/id_ed25519 -v $K/id_ed25519.pub \
-  -a "assert-key-01,$K/assert-key-01.pub" \
-  -t "auth-key-01,$K/auth-key-01.pub" > didlog.jsonl
-
-# 3. Publizieren
-curl -X PUT -H "Authorization: Bearer $AT" -H 'Content-Type: application/jsonl+json' \
-  --data-binary @didlog.jsonl "$API/identifier-entries/<SPACE-ID>"
-
-# 4. Im Service Portal: Profil → DID auswählen → Willensäusserung (QES-signiert) hochladen
-
-# 5. Proof of Possession
-curl -H "Authorization: Bearer $AT" "$TRUST/trust-onboarding-submission/proof-of-possessions"   # liefert nonce
-java -jar $TB create-pop -d didlog.jsonl -k "<DID>#assert-key-01" -n <NONCE> -s $K/assert-key-01 > pop.jwt
-curl -X POST -H "Authorization: Bearer $AT" -H 'Content-Type: application/json' \
-  -d "{\"proofOfPossessions\": [\"$(cat pop.jwt)\"]}" \
-  "$TRUST/trust-onboarding-submission/proof-of-possessions"
-
-# 6. Im Portal „Antrag verbindlich einreichen" → automatische Prüfung → eingetragen
-```
-
-`$AT` ist das Token aus dem API Self-Service Portal (**„Token aktualisieren"** liefert ein Access Token, 25 h gültig – kein Refresh Token).
-
-### Noch offen (sobald 5.x-Images verfügbar sind, spätestens Anfang November)
-
-1. `.env`: die fünf DID-Strings auf die neue `did:webvh` umstellen
-2. Issuer: `dc+sd-jwt`, DPoP wieder aktivieren
-3. Verifier: Trust-Protocol-2.0-Variablen (`SWIYU_TMS_*`, `SWIYU_TRUST_ISSUER_DID`)
-4. `ch.oddb.org`: `accepted_issuer_did` und `CREDENTIAL_FORMAT`
-5. Alle Arztausweise neu ausstellen
-
----
+„Demo" und „Unbekannt" am Nachweis bleiben, solange wir in der Sandbox (`swiyu-int`) sind.
 
 ## Bekannte Fallstricke
 

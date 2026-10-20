@@ -114,9 +114,10 @@ It reuses the **existing** keys (`id_ed25519` as update key, `assert-key-01`, `a
 1. `APPLICATION_DPOP_ENFORCE=true` — verify the handshake with the current wallet first
 2. Re-issue all remaining doctor credentials (old `vc+sd-jwt` on `did:tdw` are rejected)
 3. Production onboarding via info@swiyu.admin.ch (swiyu@eid.admin.ch bounces — no MX) before the Sandbox/Production split
-4. Wallet warning "This request is not registered in the Confederation's system" (credential badges "Demo"/"Unbekannt") on every presentation; login still works. Presumably a missing vqPS: verifier needs `SWIYU_TMS_*` (incl. a bootstrap refresh token — source unknown, portal gives only access tokens) and `ch.oddb.org` must send `verification_purpose`. Asked 19.10.2026 in discussioncomment-19038532 and at info@swiyu.admin.ch — wait for the answer before configuring
 
-**Registry API notes:** DID spaces are listed at `GET …/identifier/business-entities/<partner>/identifier` (not `identifier-entries`). PoP is submitted as `{"proofOfPossessions": ["<jwt>"]}`. The API Self-Service Portal button "Token aktualisieren" yields an **access token** (`typ: Bearer`, 25 h), not a refresh token.
+**vqPS (done 20.10.2026):** without a Verification Query Public Statement the wallet warns "This request is not registered in the Confederation's system". Fixed by setting `SWIYU_TMS_BOOTSTRAP_REFRESH_TOKEN` (setup fills the other `SWIYU_TMS_*` with defaults) and sending `verification_purpose` from `ch.oddb.org`. The TMS refresh token is rotated into the verifier DB like the status-registry one — never `down -v` the verifier either. "Demo"/"Unbekannt" badges remain while on `swiyu-int`.
+
+**Registry API notes:** DID spaces are listed at `GET …/identifier/business-entities/<partner>/identifier` (not `identifier-entries`). PoP is submitted as `{"proofOfPossessions": ["<jwt>"]}`. The API Self-Service Portal (`https://selfservice.api.admin.ch/api-selfservice/`) button "Token aktualisieren" shows the **access token** (`typ: Bearer`, RS256, 25 h) first; the **refresh token** (`typ: Offline`, HS512, 7 days unused) is further down in the dialog — scroll.
 
 ## Editing the Setup Script
 
