@@ -86,6 +86,20 @@ SWIYU_STATUS_REGISTRY_TOKEN_URL="${SWIYU_STATUS_REGISTRY_TOKEN_URL:-https://keym
 : "${SWIYU_STATUS_REGISTRY_CUSTOMER_SECRET:?Bitte SWIYU_STATUS_REGISTRY_CUSTOMER_SECRET setzen}"
 : "${SWIYU_STATUS_REGISTRY_BOOTSTRAP_REFRESH_TOKEN:?Bitte SWIYU_STATUS_REGISTRY_BOOTSTRAP_REFRESH_TOKEN setzen}"
 
+# ── Trust Protocol 2.0: vqPS-Registrierung im Verifier (optional) ─────────
+# Ohne Verification Query Public Statement zeigt die Wallet bei jeder Anfrage
+# "This request is not registered in the Confederation's system". Ist
+# SWIYU_TMS_BOOTSTRAP_REFRESH_TOKEN gesetzt, registriert der Verifier das vqPS
+# selbst, sofern der Consumer ein verification_purpose mitschickt.
+# Der Refresh Token stammt aus dem API Self-Service Portal (swiyucorebusiness_trust,
+# "Token aktualisieren", im Dialog nach unten scrollen) und wird wie beim Issuer
+# beim ersten Gebrauch rotiert und in der Verifier-DB gespeichert.
+SWIYU_TMS_AUTHORING_URL="${SWIYU_TMS_AUTHORING_URL:-https://trust-reg-api.trust-infra.swiyu-int.admin.ch}"
+SWIYU_TMS_OAUTH_TOKEN_URL="${SWIYU_TMS_OAUTH_TOKEN_URL:-${SWIYU_STATUS_REGISTRY_TOKEN_URL}}"
+SWIYU_TMS_OAUTH_CLIENT_ID="${SWIYU_TMS_OAUTH_CLIENT_ID:-${SWIYU_STATUS_REGISTRY_CUSTOMER_KEY}}"
+SWIYU_TMS_OAUTH_CLIENT_SECRET="${SWIYU_TMS_OAUTH_CLIENT_SECRET:-${SWIYU_STATUS_REGISTRY_CUSTOMER_SECRET}}"
+SWIYU_TMS_BOOTSTRAP_REFRESH_TOKEN="${SWIYU_TMS_BOOTSTRAP_REFRESH_TOKEN:-}"
+
 # ── Verifier Management API-Key (für native Apps ohne feste IP) ──────────
 # Wird automatisch generiert falls nicht in .env gesetzt.
 # Native Apps senden diesen Key als Header: X-API-Key: <key>
@@ -470,6 +484,19 @@ EOF
 # ─────────────────────────────────────────────────────────────────────────────
 write_verifier_compose() {
     info "Schreibe Verifier docker-compose.yml..."
+    # Die TMS-Variablen nur setzen, wenn ein Refresh Token vorhanden ist –
+    # eine leere SWIYU_TMS_AUTHORING_URL gilt nicht als "nicht gesetzt".
+    local tms_env=""
+    if [[ -n "${SWIYU_TMS_BOOTSTRAP_REFRESH_TOKEN}" ]]; then
+        tms_env='      # Trust Protocol 2.0: vqPS-Registrierung
+      SWIYU_TMS_AUTHORING_URL: ${SWIYU_TMS_AUTHORING_URL}
+      SWIYU_TMS_OAUTH_TOKEN_URL: ${SWIYU_TMS_OAUTH_TOKEN_URL}
+      SWIYU_TMS_OAUTH_CLIENT_ID: ${SWIYU_TMS_OAUTH_CLIENT_ID}
+      SWIYU_TMS_OAUTH_CLIENT_SECRET: ${SWIYU_TMS_OAUTH_CLIENT_SECRET}
+      SWIYU_TMS_BOOTSTRAP_REFRESH_TOKEN: ${SWIYU_TMS_BOOTSTRAP_REFRESH_TOKEN}
+'
+    fi
+
     cat > "${SETUP_DIR}/verifier/docker-compose.yml" <<EOF
 # swiyu Generic Verifier – Docker Compose
 # Generiert von swiyu-setup.sh
@@ -513,7 +540,7 @@ services:
       # Metadaten – file: Prefix zwingend!
       OPENID_CLIENT_METADATA_FILE: file:/config/verifier_metadata.json
       SPRING_PROFILES_ACTIVE: prod
-    volumes:
+${tms_env}    volumes:
       - ./config/verifier_metadata.json:/config/verifier_metadata.json:ro
     ports:
       # OID4VP + Management API laufen beide auf Port 8080 intern -> 8083 extern
@@ -574,6 +601,11 @@ VERIFIER_DID=${VERIFIER_DID}
 VERIFIER_DID_VERIFICATION_METHOD=${VERIFIER_DID_VERIFICATION_METHOD}
 VERIFIER_SIGNING_KEY=${VERIFIER_SIGNING_KEY}
 VERIFIER_DB_PASSWORD=${VERIFIER_DB_PASSWORD}
+SWIYU_TMS_AUTHORING_URL=${SWIYU_TMS_AUTHORING_URL}
+SWIYU_TMS_OAUTH_TOKEN_URL=${SWIYU_TMS_OAUTH_TOKEN_URL}
+SWIYU_TMS_OAUTH_CLIENT_ID=${SWIYU_TMS_OAUTH_CLIENT_ID}
+SWIYU_TMS_OAUTH_CLIENT_SECRET=${SWIYU_TMS_OAUTH_CLIENT_SECRET}
+SWIYU_TMS_BOOTSTRAP_REFRESH_TOKEN=${SWIYU_TMS_BOOTSTRAP_REFRESH_TOKEN}
 EOF
     chmod 600 "${SETUP_DIR}/verifier/.env"
     success ".env-Dateien geschrieben (chmod 600)."
