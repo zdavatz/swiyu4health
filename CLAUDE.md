@@ -75,6 +75,7 @@ There are no tests, linters, or CI/CD pipelines.
 11. **Metadata `version` was replaced by `profile_version`:** the 4.x issuer rebuilds the metadata itself and emits `profile_version` (Swiss Profile) instead of the `version: "1.0"` field older wallets required. The `version` key in `issuer_metadata.json` is ignored — that is expected, not a defect
 12. **iOS Wallet mandatory metadata fields:** `display` array, `nonce_endpoint`, `cryptographic_binding_methods_supported: ["jwk"]` — missing any causes silent "Ungültiger Nachweis" failure
 13. **Wallet 2-min timeout:** Must scan QR with wallet's internal scanner within 2 minutes of PIN entry, otherwise no Key Binding (`cnf` claim missing)
+14. **Deeplink schemes must suit the swiyu Sandbox Wallet:** the image defaults `swiyu://` (issuer) and `swiyu-verify://` (verifier) are only registered by the normal swiyu Wallet, which drops Sandbox credentials with Wallet 2.0 (mid-November 2026). The Sandbox Wallet only registers `openid-credential-offer`, `openid4vp`, `swiyu-sandbox`, `swiyu-verify-sandbox`. `setup` therefore sets `DEEPLINK_SCHEMA` to `openid-credential-offer` / `openid4vp`, which both wallets understand (override via `ISSUER_DEEPLINK_SCHEMA` / `VERIFIER_DEEPLINK_SCHEMA`)
 
 ## Debugging the Wallet Flow
 
@@ -112,10 +113,12 @@ It reuses the **existing** keys (`id_ed25519` as update key, `assert-key-01`, `a
 
 **Remaining:**
 1. `APPLICATION_DPOP_ENFORCE=true` — verify the handshake with the current wallet first
-2. Re-issue all remaining doctor credentials (old `vc+sd-jwt` on `did:tdw` are rejected)
-3. Production onboarding via info@swiyu.admin.ch (swiyu@eid.admin.ch bounces — no MX) before the Sandbox/Production split
+2. Move all users to the swiyu Sandbox Wallet and re-issue their credentials there before mid-November (old `vc+sd-jwt` on `did:tdw` are rejected anyway)
+3. Production: not before H1 2027; contact info@swiyu.admin.ch / andre.kunz@bj.admin.ch (swiyu@eid.admin.ch bounces — no MX)
 
 **vqPS (done 20.10.2026):** without a Verification Query Public Statement the wallet warns "This request is not registered in the Confederation's system". Fixed by setting `SWIYU_TMS_BOOTSTRAP_REFRESH_TOKEN` (setup fills the other `SWIYU_TMS_*` with defaults) and sending `verification_purpose` from `ch.oddb.org`. The TMS refresh token is rotated into the verifier DB like the status-registry one — never `down -v` the verifier either. "Demo"/"Unbekannt" badges remain while on `swiyu-int`.
+
+**Sandbox Wallet (21.10.2026):** per André Kunz (BJ) our did:webvh and vqPS are valid in the Sandbox Trust Register, no re-onboarding needed, and the Sandbox needs no QES. Production trust infrastructure only from H1 2027, and a doctor credential could only be issued there by the responsible authority. Users must move to the **swiyu Sandbox Wallet** before mid-November and get a new credential: iOS App Store `id6771296857`, Android **only as APK** from `github.com/swiyu-admin-ch/eidch-android-wallet/releases`. Issuance and ch.oddb.org login with the Sandbox Wallet confirmed 21.10.2026.
 
 **Registry API notes:** DID spaces are listed at `GET …/identifier/business-entities/<partner>/identifier` (not `identifier-entries`). PoP is submitted as `{"proofOfPossessions": ["<jwt>"]}`. The API Self-Service Portal (`https://selfservice.api.admin.ch/api-selfservice/`) button "Token aktualisieren" shows the **access token** (`typ: Bearer`, RS256, 25 h) first; the **refresh token** (`typ: Offline`, HS512, 7 days unused) is further down in the dialog — scroll.
 

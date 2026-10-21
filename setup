@@ -128,6 +128,15 @@ VERIFIER_DB_PASSWORD="${VERIFIER_DB_PASSWORD:-$(openssl rand -hex 24)}"
 ISSUER_IMAGE_TAG="${ISSUER_IMAGE_TAG:-5.0.1-unhardened}"
 VERIFIER_IMAGE_TAG="${VERIFIER_IMAGE_TAG:-5.0.1-unhardened}"
 
+# ── Deeplink-Schemata ──────────────────────────────────────────────────────
+# Die Defaults der Images (swiyu:// und swiyu-verify://) kennt nur die normale
+# swiyu Wallet. Die swiyu Sandbox Wallet registriert nur openid-credential-offer,
+# openid4vp, swiyu-sandbox und swiyu-verify-sandbox. Ab Wallet 2.0 (Mitte November
+# 2026) nimmt die normale Wallet keine Sandbox-Nachweise mehr an. Die
+# Standard-Schemata funktionieren mit beiden Wallets.
+ISSUER_DEEPLINK_SCHEMA="${ISSUER_DEEPLINK_SCHEMA:-openid-credential-offer}"
+VERIFIER_DEEPLINK_SCHEMA="${VERIFIER_DEEPLINK_SCHEMA:-openid4vp}"
+
 # ── Credential-Typ ─────────────────────────────────────────────────────────
 CREDENTIAL_TYPE="${CREDENTIAL_TYPE:-doctor-credential}"
 CREDENTIAL_VCT="${CREDENTIAL_VCT:-doctor-credential-sdjwt}"
@@ -441,6 +450,8 @@ services:
       # mit der Wallet nachweislich funktioniert.
       APPLICATION_DPOP_ENFORCE: \${APPLICATION_DPOP_ENFORCE:-false}
       APPLICATION_ENCRYPTION_ENFORCE: \${APPLICATION_ENCRYPTION_ENFORCE:-false}
+      # Schema der Deeplinks im Credential Offer, siehe ISSUER_DEEPLINK_SCHEMA
+      DEEPLINK_SCHEMA: \${ISSUER_DEEPLINK_SCHEMA:-openid-credential-offer}
       # DID & Schlüssel (offizielle Variablennamen laut swiyu-issuer Doku)
       ISSUER_ID: \${ISSUER_DID}
       DID_SDJWT_VERIFICATION_METHOD: \${ISSUER_DID_VERIFICATION_METHOD}
@@ -533,6 +544,8 @@ services:
       POSTGRES_PASSWORD: \${VERIFIER_DB_PASSWORD}
       # Öffentliche URL
       EXTERNAL_URL: \${VERIFIER_EXTERNAL_URL}
+      # Schema der verification_deeplink, siehe VERIFIER_DEEPLINK_SCHEMA
+      DEEPLINK_SCHEMA: \${VERIFIER_DEEPLINK_SCHEMA:-openid4vp}
       # DID & Schlüssel
       VERIFIER_DID: \${VERIFIER_DID}
       DID_VERIFICATION_METHOD: \${VERIFIER_DID_VERIFICATION_METHOD}
@@ -581,6 +594,7 @@ STATUS_LIST_VERIFICATION_METHOD=${STATUS_LIST_VERIFICATION_METHOD}
 ISSUER_DB_PASSWORD=${ISSUER_DB_PASSWORD}
 APPLICATION_DPOP_ENFORCE=${APPLICATION_DPOP_ENFORCE:-false}
 APPLICATION_ENCRYPTION_ENFORCE=${APPLICATION_ENCRYPTION_ENFORCE:-false}
+ISSUER_DEEPLINK_SCHEMA=${ISSUER_DEEPLINK_SCHEMA}
 SWIYU_PARTNER_ID=${SWIYU_PARTNER_ID}
 SWIYU_STATUS_REGISTRY_API_URL=${SWIYU_STATUS_REGISTRY_API_URL}
 SWIYU_STATUS_REGISTRY_TOKEN_URL=${SWIYU_STATUS_REGISTRY_TOKEN_URL}
@@ -601,6 +615,7 @@ VERIFIER_DID=${VERIFIER_DID}
 VERIFIER_DID_VERIFICATION_METHOD=${VERIFIER_DID_VERIFICATION_METHOD}
 VERIFIER_SIGNING_KEY=${VERIFIER_SIGNING_KEY}
 VERIFIER_DB_PASSWORD=${VERIFIER_DB_PASSWORD}
+VERIFIER_DEEPLINK_SCHEMA=${VERIFIER_DEEPLINK_SCHEMA}
 SWIYU_TMS_AUTHORING_URL=${SWIYU_TMS_AUTHORING_URL}
 SWIYU_TMS_OAUTH_TOKEN_URL=${SWIYU_TMS_OAUTH_TOKEN_URL}
 SWIYU_TMS_OAUTH_CLIENT_ID=${SWIYU_TMS_OAUTH_CLIENT_ID}

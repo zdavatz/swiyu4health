@@ -536,6 +536,20 @@ Sie verwendet die **bestehenden Schlüssel** – die `*_SIGNING_KEY`-Werte in de
 
 Noch offen: `APPLICATION_DPOP_ENFORCE=true` mit der aktuellen Wallet testen.
 
+### swiyu Sandbox Wallet (ab Mitte November 2026 Pflicht)
+
+Mit Wallet 2.0 (Mitte November 2026) nimmt die normale **swiyu Wallet** nur noch Nachweise aus der Produktion an. Sandbox-Nachweise löscht sie. Für unseren Arztausweis braucht es dann die **swiyu Sandbox Wallet**:
+
+- **iOS:** https://apps.apple.com/ch/app/swiyu-sandbox-wallet/id6771296857
+- **Android:** nicht im Google Play Store, nur als APK (`SwiyuWallet-sandbox_*.apk`): https://github.com/swiyu-admin-ch/eidch-android-wallet/releases
+- Aktuelle Versionen: https://swiyu-admin-ch.github.io/open-source-components/#component-versions
+
+Ein Nachweis lässt sich nicht von einer Wallet in die andere verschieben. Jeder Nutzer braucht einen neuen QR-Code.
+
+**Deeplink-Schemata:** Die Sandbox Wallet registriert nur `openid-credential-offer`, `openid4vp`, `swiyu-sandbox` und `swiyu-verify-sandbox`, nicht aber die Image-Defaults `swiyu://` und `swiyu-verify://`. `setup` setzt deshalb `DEEPLINK_SCHEMA` auf `openid-credential-offer` (Issuer) und `openid4vp` (Verifier). Diese Schemata versteht auch die normale swiyu Wallet. Überschreibbar mit `ISSUER_DEEPLINK_SCHEMA` / `VERIFIER_DEEPLINK_SCHEMA` in der `.env`. Ausstellung und Login über ch.oddb.org mit der Sandbox Wallet am 21.10.2026 getestet.
+
+Laut BJ (21.10.2026) sind unsere did:webvh und das vqPS im Sandbox Trust Register gültig, ein Re-Onboarding ist nicht nötig. In der Sandbox braucht es keine qualifizierte Willensäusserung. Die produktive Vertrauensinfrastruktur kommt voraussichtlich im ersten Halbjahr 2027. Einen Arztausweis könnte dort nur die zuständige Behörde ausstellen.
+
 ### Gelöst: Wallet-Warnung „request not registered" (vqPS)
 
 Ohne **Verification Query Public Statement (vqPS)** zeigt die Wallet ab 5.x bei jeder Präsentationsanfrage:
