@@ -536,6 +536,19 @@ Sie verwendet die **bestehenden Schlüssel** – die `*_SIGNING_KEY`-Werte in de
 
 Noch offen: `APPLICATION_DPOP_ENFORCE=true` mit der aktuellen Wallet testen.
 
+### Java4Shell (CVE-2026-114938): Übergangsmassnahme aktiv
+
+Am 18.11.2026 [meldete swiyu](https://github.com/orgs/swiyu-admin-ch/discussions/11#discussioncomment-19712164), dass Issuer und Verifier von der OpenJDK-Lücke „Java4Shell" betroffen sind ([BACS-Warnung](https://www.bacs.admin.ch/de/warnung-java-2-de)). Die Lücke steckt im beschleunigten Base64-Decoder und lässt sich ohne Login über das Netzwerk ausnutzen, wenn die CPU AVX-512 VBMI hat. Unser Server erfüllt das (`avx512f`, `avx512bw`, `avx512vbmi`, `bmi2`), und die 5.0.1-Images laufen auf Temurin 25.0.4.1. Gefixt ist erst 25.0.5.1.
+
+Bis zum gepatchten swiyu-Image gibt `setup` beiden Containern `JAVA_TOOL_OPTIONS=-XX:-UseBASE64Intrinsics` mit (überschreibbar mit `SWIYU_JAVA_TOOL_OPTIONS`, leer = aus). Prüfen:
+
+```bash
+sudo docker logs swiyu-issuer-service 2>&1 | grep "Picked up JAVA_TOOL_OPTIONS"
+sudo docker exec swiyu-issuer-service java -version
+```
+
+Erst entfernen, wenn ein neues Image läuft und `java -version` mindestens 25.0.5.1 zeigt.
+
 ### swiyu Sandbox Wallet (ab Mitte November 2026 Pflicht)
 
 Mit Wallet 2.0 (Mitte November 2026) nimmt die normale **swiyu Wallet** nur noch Nachweise aus der Produktion an. Sandbox-Nachweise löscht sie. Für unseren Arztausweis braucht es dann die **swiyu Sandbox Wallet**:

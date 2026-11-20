@@ -76,6 +76,7 @@ There are no tests, linters, or CI/CD pipelines.
 12. **iOS Wallet mandatory metadata fields:** `display` array, `nonce_endpoint`, `cryptographic_binding_methods_supported: ["jwk"]` — missing any causes silent "Ungültiger Nachweis" failure
 13. **Wallet 2-min timeout:** Must scan QR with wallet's internal scanner within 2 minutes of PIN entry, otherwise no Key Binding (`cnf` claim missing)
 14. **Deeplink schemes must suit the swiyu Sandbox Wallet:** the image defaults `swiyu://` (issuer) and `swiyu-verify://` (verifier) are only registered by the normal swiyu Wallet, which drops Sandbox credentials with Wallet 2.0 (mid-November 2026). The Sandbox Wallet only registers `openid-credential-offer`, `openid4vp`, `swiyu-sandbox`, `swiyu-verify-sandbox`. `setup` therefore sets `DEEPLINK_SCHEMA` to `openid-credential-offer` / `openid4vp`, which both wallets understand (override via `ISSUER_DEEPLINK_SCHEMA` / `VERIFIER_DEEPLINK_SCHEMA`)
+15. **Java4Shell (CVE-2026-114938) interim mitigation:** the host CPU has AVX-512 VBMI and the 5.0.1 images ship Temurin 25.0.4.1 (fixed in 25.0.5.1), so the accelerated Base64 decoder is exploitable over the network. `setup` passes `JAVA_TOOL_OPTIONS=-XX:-UseBASE64Intrinsics` to both containers (`SWIYU_JAVA_TOOL_OPTIONS`, empty value disables). Verify with `docker logs <c> | grep "Picked up JAVA_TOOL_OPTIONS"`. Remove only once a patched swiyu image is deployed and `docker exec <c> java -version` shows >= 25.0.5.1 (announced 18.11.2026 in discussion #11)
 
 ## Debugging the Wallet Flow
 
