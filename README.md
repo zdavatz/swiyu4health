@@ -563,6 +563,10 @@ Ein Nachweis lässt sich nicht von einer Wallet in die andere verschieben. Jeder
 
 Laut BJ (21.10.2026) sind unsere did:webvh und das vqPS im Sandbox Trust Register gültig, ein Re-Onboarding ist nicht nötig. In der Sandbox braucht es keine qualifizierte Willensäusserung. Die produktive Vertrauensinfrastruktur kommt voraussichtlich im ersten Halbjahr 2027. Einen Arztausweis könnte dort nur die zuständige Behörde ausstellen.
 
+### Passkeys auf ch.oddb.org
+
+Seit 23.11.2026 kann ein Nutzer nach dem swiyu-Login auf ch.oddb.org einen Passkey einrichten und sich danach ohne Wallet anmelden. Der Passkey gilt bis zum `exp` des vorgelegten Nachweises, also bis zum `credential_valid_until` beim Ausstellen. Der Verifier liefert `exp` in `credential_subject_data` mit. `ADDITIONAL_AUDIT_INFORMATION_CREDENTIAL_SUBJECT_DATA_ENABLED` muss deshalb auf dem Default (`true`) bleiben. Details im oddb.org-Repo unter `swiyu-login.md`.
+
 ### Gelöst: Wallet-Warnung „request not registered" (vqPS)
 
 Ohne **Verification Query Public Statement (vqPS)** zeigt die Wallet ab 5.x bei jeder Präsentationsanfrage:

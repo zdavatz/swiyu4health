@@ -98,6 +98,8 @@ With DCQL the verifier groups the presented claims by query id and wraps them in
 
 The old `presentation_definition` flow returned the claims flat. Consumers must handle the nesting — `ch.oddb.org` does so in `SwiyuMiddleware#extract_claims`.
 
+The claims include the SD-JWT `exp` (the `credential_valid_until` given at issuance). Since 23.11.2026 `ch.oddb.org` uses it as the expiry date of the passkeys users can register after a swiyu login (see `swiyu-login.md` there). Keep `ADDITIONAL_AUDIT_INFORMATION_CREDENTIAL_SUBJECT_DATA_ENABLED` at its default (`true`), otherwise the claims and with them the passkey offer disappear.
+
 ## Migration to 5.x / Trust Protocol 2.0 (deadline mid-November 2026)
 
 Announced 13.10.2026 in https://github.com/swiyu-admin-ch/community/discussions/11: Issuer/Verifier 5.x drop Trust Protocol 1.0 and `vc+sd-jwt`; Sandbox and Production are separated mid-November and Sandbox credentials are deleted from the production wallet.
